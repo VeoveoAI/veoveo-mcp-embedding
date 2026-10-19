@@ -1,0 +1,33 @@
+# Embedding generation
+
+Status: implementation candidate, not deployed qualification. Template source b39a6043eacd7f1c6eada93dd618fd8a6bc15026; dependency pins are the template's exact Core 433ed5f3 and SDK b3da412 revisions.
+
+Hub calls this ordinary Rust SDK-hosted MCP service in native OpenShell Docker. It registers normally, receives a server database login and holds a native process Instance. The domain owns no text/vector tables. Its private runtime is native macOS MPS under launchd initially; Linux uses OpenShell Docker with CUDA/CDI after the authorized main merge. The runtime, not the Rust container, owns upstream Sentence Transformers/PyTorch and the fixed model snapshot.
+
+## API and permissions
+
+The contract-only feature publishes `EmbedRequest`/`EmbeddingResult`, resources and permissions. `embed` requires `embedding.embeddings.create` (write, no billed risk); `embedding://capabilities` and docs require `embedding.models.read`. Ready SDK routes drive discovery, dispatch, resource policies and registration. No new Hub/Core/SDK permission layer exists.
+
+Each item is search_query `{text}`, code_query `{text}`, or document `{content,title?}`. Ordered mixed batches contain 1–8 items and at most 65,536 UTF-8 bytes including titles. The runtime rejects more than 8,192 actual tokens per rendered item or 16,384 per batch, including prefixes and special tokens. Requests are bounded at 512 KiB JSON; runtime response at 1 MiB. Empty/blank content and titles, unknown fields, user-selected models/dimensions/dtypes, token overflow, partial/reordered results, nonfinite or nonunit vectors and wrong identities are rejected. There is no truncation.
+
+The fixed model is google/embeddinggemma-2@914f7f89142e33e77833254d9c9b90c3cef7303b. Search prefix: `task: search result | query: `; code prefix: `task: code retrieval | query: `; document template: `title: {title_or_none} | text: {content}`. Native upstream pooling/projection/normalization remains authoritative. The semantic processing ID is SHA-256 of the runtime's sorted compact semantic descriptor; device, dtype, source/package versions are separate execution provenance. There is no vector database/search API.
+
+## Runtime boundary and lifecycle
+
+The configured endpoint is one fixed private HTTP(S) origin; redirects and protocol retries are disabled. An opaque native OpenShell provider placeholder is sent as bearer authorization and resolved only by the admitted path/binary policy. Runtime credentials never enter the Hub response. The typed ReadCapabilities resource is a validated startup snapshot, including its runtime build identity; reading it does not refresh health or provenance. Runtime capabilities are checked at startup; /readyz rechecks authenticated capabilities/health within three seconds. Neither readiness nor an embedding request downloads a model. The model is prefetched by the operator into a trusted native Hugging Face cache and loaded read-only by exact revision.
+
+One GPU batch is admitted at a time. Busy requests fail before execution instead of queuing. The tool has a 60-second deadline; GPU kernels may continue after timeout/disconnect. The runtime retains the GPU slot until its real worker finishes. A caller retry starts a new computation; there is no automatic mutation replay or durable Task claim. Restart drops in-memory requests/results; Core usage/process identity persists through native APIs.
+
+## Usage and failures
+
+The closed `embedding.input_tokens` kind is nonmonetary, FOCUS AI and Machine Learning / Tokens. Core's public UsageStore/UsageWrite APIs support synchronous task=None records; the SDK's current Task-only facade is not a reason to create Tasks. No foreign-schema SQL exists in this component.
+
+Before dispatch, reserve min(item_count × 8192, 16384) tokens. This is a conservative estimate, never measured usage. A successful validated runtime response supplies actual prefix/special-inclusive tokens. The source ID is a fresh server UUIDv7 bound to the verified Hub caller tenant/principal/work context. A typed, explicitly not_started rejection from the configured runtime produces zero actual tokens; arbitrary HTTP errors, disconnects, timeout and invalid output remain ambiguous and retain the estimate. A successful inference followed by accounting failure returns an explicit inference-completed/accounting-failed error, never a false successful tool result or a hidden replay. If the overall deadline interrupts accounting, the error explicitly says execution/accounting may be incomplete. Text and vectors are never part of ledger records or application logs.
+
+## Validation
+
+Contract and synthetic-provider tests cover admission, exact identity/order/finite/norm/token boundaries, permissions, pre-execution rejection, ambiguous failures and accounting failures without replay. Native PostgreSQL fixture tests prove non-Task Core accounting under a server login. Docker check is deterministic and does not perform inference. Real pinned-model MPS qualification, authenticated deployed Hub/runtime calls, then later Linux CUDA/CDI are separate measured gates.
+
+Delegated calls preserve the verified Hub acting server and task through native Core UsageVia, while the embedding operation itself has no Task. Core's native TaskId parser accepts UUID task identities; an opaque task that it cannot represent is explicitly rejected before usage reservation or runtime dispatch. No attribution is silently dropped or mapped to a new identifier.
+
+Private-runtime rejections expose only a closed safe code (including item_token_limit, batch_token_limit, busy, unauthorized and not_ready), with matching status and explicit not_started provenance. Input rejections are MCP invalid-parameter errors. Unknown codes, mismatched status/request IDs and arbitrary failure bodies remain ambiguous execution; their text is never exposed.
