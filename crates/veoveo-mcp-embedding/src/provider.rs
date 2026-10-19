@@ -123,6 +123,9 @@ impl RuntimeClient {
         let http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
+            // The owned runtime closes idle HTTP connections after five seconds.
+            // Retire our side first, including through a mediated connection.
+            .pool_idle_timeout(Duration::from_secs(4))
             .timeout(Duration::from_secs(REQUEST_SECONDS))
             .build()?;
         Ok(Self {
@@ -491,6 +494,132 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn expired_mediated_connection_is_retired_before_one_delayed_post() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        // Synthetic intermediary and unit vector only; no provider or inference.
+        // It leaves the downstream socket open after its upstream expires at5s.
+        // A POST on that old connection fails without a response, like stale EOF.
+        let capabilities: Capabilities = serde_json::from_value(serde_json::json!({
+            "model":{"id":MODEL_ID,"revision":MODEL_REVISION},"processingId":PROCESSING_ID,
+            "dimensions":DIMENSIONS,"normalized":true,"execution":{"device":"mps","dtype":"float32"},
+            "runtime":{"package":"veoveo-runtime-embedding","version":"0.1.0","sourceRevision":"synthetic",
+                "python":"3.14.6","sentenceTransformers":"6.1.0","transformers":"5.20.2",
+                "torch":"2.14.1","torchvision":"0.29.1","pillow":"13.0.0"},
+            "purposes":["search_query","code_query","document"],
+            "limits":{"maxItems":MAX_ITEMS,"maxContentBytes":MAX_CONTENT_BYTES,
+                "maxItemTokens":MAX_ITEM_TOKENS,"maxBatchTokens":MAX_BATCH_TOKENS}
+        })).unwrap();
+        let request = RuntimeRequest {
+            request_id: uuid::Uuid::now_v7(),
+            items: vec![EmbeddingInput::SearchQuery {
+                text: "synthetic".into(),
+            }],
+        };
+        let mut vector = vec![0.; DIMENSIONS];
+        vector[0] = 1.;
+        let output = EmbeddingResult {
+            request_id: request.request_id,
+            model: capabilities.model.clone(),
+            processing_id: capabilities.processing_id.clone(),
+            dimensions: DIMENSIONS,
+            normalized: true,
+            execution: capabilities.execution.clone(),
+            runtime: capabilities.runtime.clone(),
+            items: vec![Embedding {
+                index: 0,
+                purpose: Purpose::SearchQuery,
+                vector,
+                token_count: 1,
+            }],
+            usage: TokenUsage { input_tokens: 1 },
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let cap_body = serde_json::to_string(&capabilities).unwrap();
+        let body = serde_json::to_string(&output).unwrap();
+        let task = tokio::spawn(async move {
+            let (mut initial, _) = listener.accept().await.unwrap();
+            let initial_request = read_http_request(&mut initial).await;
+            assert!(initial_request.starts_with(b"GET /capabilities HTTP/1.1\r\n"));
+            initial.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{cap_body}", cap_body.len()).as_bytes()).await.unwrap();
+            initial.flush().await.unwrap();
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            // Do not propagate upstream expiry to the old downstream socket.
+            let (fresh, mut socket, bytes) = tokio::select! {
+                accepted = listener.accept() => {
+                    let (mut socket, _) = accepted.unwrap();
+                    let bytes = read_http_request(&mut socket).await;
+                    (true, socket, bytes)
+                }
+                bytes = read_http_request(&mut initial) => {
+                    if bytes.is_empty() {
+                        let (mut socket, _) = listener.accept().await.unwrap();
+                        let bytes = read_http_request(&mut socket).await;
+                        (true, socket, bytes)
+                    } else {
+                        (false, initial, bytes)
+                    }
+                }
+            };
+            let mut posts = usize::from(bytes.starts_with(b"POST /embeddings HTTP/1.1\r\n"));
+            assert_eq!(posts, 1);
+            if fresh {
+                socket.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            }
+            socket.shutdown().await.unwrap();
+            // Any automatic retry would require a third accepted connection.
+            if let Ok(Ok((mut extra, _))) =
+                tokio::time::timeout(Duration::from_millis(100), listener.accept()).await
+            {
+                let bytes = read_http_request(&mut extra).await;
+                posts += usize::from(bytes.starts_with(b"POST /embeddings HTTP/1.1\r\n"));
+            }
+            (fresh, posts)
+        });
+        let client =
+            RuntimeClient::new(origin, SecretString::from("synthetic"), Device::Mps).unwrap();
+        client.capabilities().await.unwrap();
+        tokio::time::sleep(Duration::from_secs(6)).await;
+        let result = tokio::time::timeout(Duration::from_secs(2), client.embed(&request))
+            .await
+            .unwrap();
+        let (fresh, posts) = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            fresh,
+            "delayed POST reused the intermediary's expired upstream"
+        );
+        assert_eq!(posts, 1, "embedding was replayed");
+        assert_eq!(result.unwrap().request_id, request.request_id);
+    }
+
+    async fn read_http_request(socket: &mut tokio::net::TcpStream) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let mut chunk = [0; 4096];
+        loop {
+            let count = socket.read(&mut chunk).await.unwrap();
+            if count == 0 {
+                return bytes;
+            }
+            bytes.extend_from_slice(&chunk[..count]);
+            assert!(bytes.len() <= MAX_JSON_BYTES + 8192);
+            if let Some(end) = bytes.windows(4).position(|value| value == b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&bytes[..end]);
+                let length: usize = headers
+                    .lines()
+                    .filter_map(|line| line.split_once(':'))
+                    .find(|(key, _)| key.eq_ignore_ascii_case("content-length"))
+                    .map_or(0, |(_, value)| value.trim().parse().unwrap());
+                if bytes.len() >= end + 4 + length {
+                    return bytes;
+                }
+            }
+        }
+    }
+
     /// Synthetic HTTP peer only; it never performs inference or resolves a credential.
     async fn peer(
         status: &str,
@@ -506,28 +635,7 @@ mod tests {
         );
         let task = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
-            let mut bytes = Vec::new();
-            let mut chunk = [0; 4096];
-            loop {
-                let count = socket.read(&mut chunk).await.unwrap();
-                assert!(count > 0);
-                bytes.extend_from_slice(&chunk[..count]);
-                if let Some(end) = bytes.windows(4).position(|value| value == b"\r\n\r\n") {
-                    let headers = String::from_utf8_lossy(&bytes[..end]);
-                    let length: usize = headers
-                        .lines()
-                        .filter_map(|line| line.split_once(':'))
-                        .find(|(key, _)| key.eq_ignore_ascii_case("content-length"))
-                        .unwrap()
-                        .1
-                        .trim()
-                        .parse()
-                        .unwrap();
-                    if bytes.len() >= end + 4 + length {
-                        break;
-                    }
-                }
-            }
+            let bytes = read_http_request(&mut socket).await;
             socket.write_all(reply.as_bytes()).await.unwrap();
             String::from_utf8(bytes).unwrap()
         });
