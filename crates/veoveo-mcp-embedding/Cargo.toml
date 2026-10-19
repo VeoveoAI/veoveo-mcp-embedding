@@ -73,6 +73,7 @@ veoveo-usage = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
 
 [dev-dependencies]
+sha2 = "=0.11.0"
 veoveo-hub-sdk = { workspace = true, features = ["server", "testing"] }
 # `database-conformance` holds the crate's queries and schema to core's database rules.
 veoveo-fixtures = { workspace = true, features = ["store", "database-conformance"] }
@@ -97,4 +98,8 @@ required-features = ["server"]
 
 [[test]]
 name = "generation"
+required-features = ["server"]
+
+[[test]]
+name = "acceptance"
 required-features = ["server"]
