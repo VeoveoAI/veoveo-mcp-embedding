@@ -2,7 +2,7 @@
 
 Standalone bounded embedding generation through Veoveo Hub and an authenticated private GPU runtime. This Rust service owns native registration, permissions and Core usage; the private runtime owns GPU inference. Read [DESIGN](crates/veoveo-mcp-embedding/DESIGN.md) for the component contract and the [architecture](https://github.com/VeoveoAI/veoveo-docs/blob/main/LORE_OPENSHELL_INTEGRATION.md#embedding-generation) for platform responsibilities.
 
-Measured Mac deployment evidence and the separate Linux acceptance gates are tracked in the [execution plan](https://github.com/VeoveoAI/veoveo-docs/blob/main/OPENSHELL_HARDCUT_PLAN.md#embedding-generation--2026-10-19). Linux deployed acceptance remains pending; synthetic tests alone do not establish real inference.
+Mac MPS and Linux CUDA deployment qualification passed through the Hub, including real inference, token accounting, capacity, access denial and restart persistence. The [execution plan](https://github.com/VeoveoAI/veoveo-docs/blob/main/OPENSHELL_HARDCUT_PLAN.md#embedding-generation--2026-10-19) records source identities, measurements and proof limits. Synthetic component tests are reported separately.
 
 ## Check
 
