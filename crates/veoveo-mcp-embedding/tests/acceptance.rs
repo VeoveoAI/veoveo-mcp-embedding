@@ -29,7 +29,7 @@ use anyhow::{Context, Result, anyhow, bail, ensure};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use veoveo_hub_sdk::{
-    client::{CallError, HubClient, StaticBearer},
+    client::{CallError, CatalogError, HubClient, StaticBearer},
     identity::HubProfileId,
 };
 use veoveo_mcp_embedding::{
@@ -298,6 +298,128 @@ fn record(report: &mut Value, method: &str, started: Instant, detail: Value) {
     let steps = report["sequence"].as_array_mut().expect("sequence");
     steps.push(json!({"sequence":steps.len()+1,"method":method,"elapsedMs":elapsed(started),"detail":detail}));
 }
+
+fn discovery_error_detail(error: &CallError) -> Value {
+    // Initialization failures are already Transport(String) in the pinned SDK.
+    // Never recover fields by parsing that string: it can contain private bodies.
+    let variant = match error {
+        CallError::Refused { .. } => "Refused",
+        CallError::Undeclared { .. } => "Undeclared",
+        CallError::Rejected { .. } => "Rejected",
+        CallError::Tool { .. } => "Tool",
+        CallError::Task { .. } => "Task",
+        CallError::InputRequired => "InputRequired",
+        CallError::Timeout(_) => "Timeout",
+        CallError::Decode(_) => "Decode",
+        CallError::Content { .. } => "Content",
+        CallError::Unsubscribed { .. } => "Unsubscribed",
+        CallError::Contract(_) => "Contract",
+        CallError::ToolName { .. } => "ToolName",
+        CallError::NoCallerBearer => "NoCallerBearer",
+        CallError::Catalog(_) => "Catalog",
+        CallError::Transport(_) => "Transport",
+    };
+    let mut detail = json!({"sdkVariant":variant,"httpStatus":null,"jsonRpcCode":null,
+        "transportFlags":null,"typedTransportCauseAvailable":false});
+    match error {
+        CallError::Rejected { code, .. } => detail["jsonRpcCode"] = json!(code),
+        CallError::Catalog(error) => {
+            detail["catalogVariant"] = json!(match error {
+                CatalogError::Request { .. } => "Request",
+                CatalogError::RepeatedCursor { .. } => "RepeatedCursor",
+                CatalogError::TooManyPages { .. } => "TooManyPages",
+                CatalogError::TooManyItems { .. } => "TooManyItems",
+                CatalogError::Deadline { .. } => "Deadline",
+                CatalogError::Metadata { .. } => "Metadata",
+            });
+            if let CatalogError::Request { error, .. } = error {
+                use rmcp::service::ServiceError;
+                detail["serviceVariant"] = json!(match error {
+                    ServiceError::McpError(_) => "McpError",
+                    ServiceError::TransportSend(_) => "TransportSend",
+                    ServiceError::TransportClosed => "TransportClosed",
+                    ServiceError::UnexpectedResponse => "UnexpectedResponse",
+                    ServiceError::SubscriptionLagged { .. } => "SubscriptionLagged",
+                    ServiceError::Cancelled { .. } => "Cancelled",
+                    ServiceError::Timeout { .. } => "Timeout",
+                    ServiceError::InputRequiredRoundsExceeded { .. } =>
+                        "InputRequiredRoundsExceeded",
+                    _ => "Other",
+                });
+                match error {
+                    ServiceError::McpError(error) => detail["jsonRpcCode"] = json!(error.code.0),
+                    ServiceError::TransportSend(error) => {
+                        use rmcp::transport::streamable_http_client::StreamableHttpError;
+                        if let Some(error) = error
+                            .error
+                            .downcast_ref::<StreamableHttpError<reqwest::Error>>()
+                        {
+                            detail["typedTransportCauseAvailable"] = json!(true);
+                            detail["transportVariant"] = json!(match error {
+                                StreamableHttpError::Sse(_) => "Sse",
+                                StreamableHttpError::Io(_) => "Io",
+                                StreamableHttpError::Client(_) => "Client",
+                                StreamableHttpError::UnexpectedEndOfStream =>
+                                    "UnexpectedEndOfStream",
+                                StreamableHttpError::UnexpectedServerResponse(_) =>
+                                    "UnexpectedServerResponse",
+                                StreamableHttpError::HttpResponse { .. } => "HttpResponse",
+                                StreamableHttpError::UnexpectedContentType(_) =>
+                                    "UnexpectedContentType",
+                                StreamableHttpError::ServerDoesNotSupportSse =>
+                                    "ServerDoesNotSupportSse",
+                                StreamableHttpError::ServerDoesNotSupportDeleteSession =>
+                                    "ServerDoesNotSupportDeleteSession",
+                                StreamableHttpError::TokioJoinError(_) => "TokioJoinError",
+                                StreamableHttpError::Deserialize(_) => "Deserialize",
+                                StreamableHttpError::TransportChannelClosed =>
+                                    "TransportChannelClosed",
+                                StreamableHttpError::MissingSessionIdInResponse =>
+                                    "MissingSessionIdInResponse",
+                                StreamableHttpError::AuthRequired(_) => "AuthRequired",
+                                StreamableHttpError::InsufficientScope(_) => "InsufficientScope",
+                                StreamableHttpError::ReservedHeaderConflict(_) =>
+                                    "ReservedHeaderConflict",
+                                StreamableHttpError::SessionExpired => "SessionExpired",
+                                StreamableHttpError::SessionRecoveryTimeout =>
+                                    "SessionRecoveryTimeout",
+                                StreamableHttpError::ControlRequestTimeout =>
+                                    "ControlRequestTimeout",
+                                _ => "Other",
+                            });
+                            match error {
+                                StreamableHttpError::HttpResponse { status, .. } => {
+                                    detail["httpStatus"] = json!(status.as_u16())
+                                }
+                                StreamableHttpError::AuthRequired(_) => {
+                                    detail["httpStatus"] = json!(401)
+                                }
+                                StreamableHttpError::InsufficientScope(_) => {
+                                    detail["httpStatus"] = json!(403)
+                                }
+                                StreamableHttpError::SessionExpired => {
+                                    detail["httpStatus"] = json!(404)
+                                }
+                                StreamableHttpError::Client(error) => {
+                                    detail["httpStatus"] =
+                                        json!(error.status().map(|status| status.as_u16()));
+                                    detail["transportFlags"] = json!({"isConnect":error.is_connect(),
+                                        "isTimeout":error.is_timeout(),"isRequest":error.is_request(),
+                                        "isBody":error.is_body(),"isDecode":error.is_decode(),
+                                        "isRedirect":error.is_redirect(),"isStatus":error.is_status()});
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+    detail
+}
 fn totals(page: &Value, phase: &str) -> Result<(u64, u64)> {
     let mut result = (0_u64, 0_u64);
     for row in page["rows"].as_array().context("usage rows")? {
@@ -399,10 +521,18 @@ fn parity(reference: &EmbeddingResult, current: &EmbeddingResult) -> Result<Valu
 async fn run(installation: &Installation, report: &mut Value) -> Result<()> {
     let client = installation.client(&installation.member)?;
     let started = Instant::now();
-    let tools = client
-        .tools()
-        .await
-        .map_err(|_| anyhow!("native Hub discovery failed"))?;
+    let tools = match client.tools().await {
+        Ok(tools) => tools,
+        Err(error) => {
+            record(
+                report,
+                "tools/list",
+                started,
+                json!({"status":"failed","nativeSdkError":discovery_error_detail(&error)}),
+            );
+            bail!("native Hub discovery failed");
+        }
+    };
     record(
         report,
         "tools/list",
@@ -671,10 +801,18 @@ async fn run_capacity_case(
 async fn run_capacity(installation: &Installation, report: &mut Value) -> Result<()> {
     let client = installation.client(&installation.member)?;
     let started = Instant::now();
-    let tools = client
-        .tools()
-        .await
-        .map_err(|_| anyhow!("native Hub capacity discovery failed"))?;
+    let tools = match client.tools().await {
+        Ok(tools) => tools,
+        Err(error) => {
+            record(
+                report,
+                "tools/list",
+                started,
+                json!({"status":"failed","nativeSdkError":discovery_error_detail(&error)}),
+            );
+            bail!("native Hub capacity discovery failed");
+        }
+    };
     record(
         report,
         "tools/list",
@@ -817,6 +955,49 @@ async fn native_hub_real_embedding_corpus_and_usage() -> Result<()> {
         digest(&bytes)
     );
     outcome
+}
+
+#[test]
+fn discovery_error_diagnostics_exclude_strings_and_preserve_typed_codes() {
+    // Synthetic errors exercise reporting only, never authentication or inference.
+    let secret = "synthetic-private-body-url-and-credential";
+    let rejected = discovery_error_detail(&CallError::Rejected {
+        code: -32600,
+        message: secret.into(),
+    });
+    assert_eq!(rejected["sdkVariant"], "Rejected");
+    assert_eq!(rejected["jsonRpcCode"], -32600);
+    let erased = discovery_error_detail(&CallError::Transport(secret.into()));
+    assert_eq!(erased["sdkVariant"], "Transport");
+    assert_eq!(erased["typedTransportCauseAvailable"], false);
+    assert!(erased["httpStatus"].is_null());
+    let typed = discovery_error_detail(&CallError::Catalog(CatalogError::Request {
+        operation: "tools/list",
+        error:
+            rmcp::service::ServiceError::TransportSend(
+                rmcp::transport::DynamicTransportError::from_parts(
+                    "synthetic",
+                    std::any::TypeId::of::<()>(),
+                    Box::new(
+                        rmcp::transport::streamable_http_client::StreamableHttpError::<
+                            reqwest::Error,
+                        >::HttpResponse {
+                            status: reqwest::StatusCode::UNAUTHORIZED,
+                            body: secret.into(),
+                        },
+                    ),
+                ),
+            ),
+    }));
+    assert_eq!(typed["sdkVariant"], "Catalog");
+    assert_eq!(typed["serviceVariant"], "TransportSend");
+    assert_eq!(typed["typedTransportCauseAvailable"], true);
+    assert_eq!(typed["httpStatus"], 401);
+    assert!(
+        !json!([rejected, erased, typed])
+            .to_string()
+            .contains(secret)
+    );
 }
 
 #[test]
