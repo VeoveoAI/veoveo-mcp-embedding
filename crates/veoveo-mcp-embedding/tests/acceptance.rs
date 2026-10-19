@@ -11,6 +11,8 @@
 //! certificate trust, retaining hostname verification (local gateway CA only).
 //! Run serially with other embedding calls for this principal paused:
 //! cargo nextest run --test acceptance --run-ignored only --test-threads 1
+//! Select `native_hub_real_embedding_capacity_and_usage` explicitly for the two
+//! token-ceiling workloads; it uses a separate REPORT and performs two real calls.
 //!
 //! Reports intentionally contain the fixed public corpus and real vectors, as
 //! qualification evidence only. They never contain credentials, arbitrary error
@@ -50,6 +52,52 @@ fn corpus() -> EmbedRequest {
         {"purpose":"document","title":"addition function","content":"def add(a, b):\n    return a + b"},
         {"purpose":"document","title":"multiplication function","content":"def multiply(a, b):\n    return a * b"}
     ]})).expect("fixed public corpus")
+}
+
+struct CapacityCase {
+    name: &'static str,
+    input: EmbedRequest,
+    recipe: Value,
+    expected_tokens: Vec<u64>,
+}
+
+fn capacity_cases() -> [CapacityCase; 2] {
+    // Exact public items from runtime-token-ceiling-{2x8192,
+    // mixed-1x8192-plus-7short}-request-2668a9.json. Runtime request IDs are
+    // deliberately omitted: the native MCP assigns each fresh request ID.
+    let long = |title: &str| EmbeddingInput::Document {
+        content: "a ".repeat(8180),
+        title: Some(title.into()),
+    };
+    let mut mixed = vec![long("Token ceiling document A")];
+    mixed.extend((1..=7).map(|index| EmbeddingInput::Document {
+        content: format!("short input item {index}"),
+        title: Some(format!("short-{index}")),
+    }));
+    let long_recipe = json!({"purpose":"document","content":{"unit":"a ","repeat":8180,
+        "utf8Bytes":16360,"sha256":"sha256:20c36711eccc025c3c2e6f2b4ea898ef38e675546a927a41f647bd9f4ea9bb62"}});
+    [
+        CapacityCase {
+            name: "2x8192",
+            input: EmbedRequest {
+                items: vec![
+                    long("Token ceiling document A"),
+                    long("Token ceiling document B"),
+                ],
+            },
+            recipe: json!({"longDocument":long_recipe,
+                "orderedTitles":["Token ceiling document A","Token ceiling document B"]}),
+            expected_tokens: vec![8192, 8192],
+        },
+        CapacityCase {
+            name: "mixed-1x8192-plus-7short",
+            input: EmbedRequest { items: mixed },
+            recipe: json!({"first":{"document":long_recipe,"title":"Token ceiling document A"},
+                "then":{"indicesInclusive":[1,7],"purpose":"document",
+                    "titleFormat":"short-{index}","contentFormat":"short input item {index}"}}),
+            expected_tokens: vec![8192, 15, 15, 15, 15, 15, 15, 15],
+        },
+    ]
 }
 
 fn required(name: &str) -> Result<String> {
@@ -538,6 +586,186 @@ async fn run(installation: &Installation, report: &mut Value) -> Result<()> {
     Ok(())
 }
 
+async fn run_capacity_case(
+    installation: &Installation,
+    client: &HubClient,
+    capabilities: &Capabilities,
+    case: &CapacityCase,
+    report: &mut Value,
+) -> Result<()> {
+    case.input
+        .validate()
+        .map_err(|_| anyhow!("capacity recipe violates byte admission"))?;
+    let started = Instant::now();
+    let before = installation.usage().await?;
+    record(
+        report,
+        "GET own usage/daily before",
+        started,
+        before.clone(),
+    );
+    let started = Instant::now();
+    let output = client
+        .call(case.input.clone())
+        .timeout(DEADLINE)
+        .await
+        .map_err(|_| anyhow!("real capacity embedding tool failed; no automatic replay"))?;
+    record(
+        report,
+        "tools/call embedding__embed",
+        started,
+        json!({"requestId":output.request_id}),
+    );
+    validate_result(
+        &output,
+        &RuntimeRequest {
+            request_id: output.request_id,
+            items: case.input.items.clone(),
+        },
+        &installation.device,
+    )?;
+    ensure!(
+        output.model == capabilities.model
+            && output.processing_id == capabilities.processing_id
+            && output.execution == capabilities.execution
+            && output.runtime == capabilities.runtime,
+        "capacity output identity differs from validated startup snapshot"
+    );
+    ensure!(
+        output
+            .items
+            .iter()
+            .map(|item| item.token_count)
+            .eq(case.expected_tokens.iter().copied())
+            && output.usage.input_tokens == case.expected_tokens.iter().sum::<u64>(),
+        "capacity output differs from exact expected per-item/total token counts"
+    );
+    let bytes = serde_json::to_vec(&output)?;
+    report["outputEvidence"] = json!({
+        "encoding":"serde_json compact reserialization of decoded structured tool output; not HTTP wire bytes",
+        "bytes":bytes.len(),"sha256":digest(&bytes),
+        "maxNormError":output.items.iter().map(|item| (item.vector.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>().sqrt()-1.0).abs()).fold(0.0_f64,f64::max),
+        "orderedItems":output.items.iter().map(|item| json!({"index":item.index,
+            "purpose":item.purpose,"dimensions":item.vector.len(),"tokenCount":item.token_count})).collect::<Vec<_>>()});
+    report["output"] = serde_json::to_value(&output)?;
+    let started = Instant::now();
+    let after = installation.usage().await?;
+    record(
+        report,
+        "GET own usage/daily after success",
+        started,
+        after.clone(),
+    );
+    usage_delta(&before, &after, output.usage.input_tokens, MAX_BATCH_TOKENS)?;
+    report["validatedUsageDelta"] = json!({"estimate":{"tokens":MAX_BATCH_TOKENS,"records":1},
+        "actual":{"tokens":output.usage.input_tokens,"records":1}});
+    Ok(())
+}
+
+async fn run_capacity(installation: &Installation, report: &mut Value) -> Result<()> {
+    let client = installation.client(&installation.member)?;
+    let started = Instant::now();
+    let tools = client
+        .tools()
+        .await
+        .map_err(|_| anyhow!("native Hub capacity discovery failed"))?;
+    ensure!(
+        tools
+            .items
+            .iter()
+            .any(|tool| tool.name == "embedding__embed"),
+        "embedding tool absent from authenticated capacity discovery"
+    );
+    record(
+        report,
+        "tools/list",
+        started,
+        json!({"embeddingAdvertised":true,"catalogComplete":tools.is_complete()}),
+    );
+    let started = Instant::now();
+    let capabilities = client
+        .read(ReadCapabilities)
+        .timeout(DEADLINE)
+        .await
+        .map_err(|_| anyhow!("native typed capacity capabilities read failed"))?;
+    validate_capabilities(&capabilities, &installation.device)?;
+    report["capabilitiesStartupSnapshot"] = serde_json::to_value(&capabilities)?;
+    record(
+        report,
+        "resources/read embedding://capabilities",
+        started,
+        json!({"validated":true,"freshRuntimeHealthClaim":false}),
+    );
+    for case in capacity_cases() {
+        let input_bytes = serde_json::to_vec(&case.input)?;
+        let mut evidence = json!({"case":case.name,"inputRecipe":case.recipe,
+            "inputJson":{"encoding":"compact native EmbedRequest JSON without runtime-assigned request ID",
+                "bytes":input_bytes.len(),"sha256":digest(&input_bytes)},
+            "expectedTokenCounts":case.expected_tokens,"sequence":[],"status":"in_progress"});
+        let started = Instant::now();
+        let outcome =
+            run_capacity_case(installation, &client, &capabilities, &case, &mut evidence).await;
+        evidence["elapsedMs"] = json!(elapsed(started));
+        evidence["status"] = json!(if outcome.is_ok() { "passed" } else { "failed" });
+        if let Err(error) = &outcome {
+            evidence["failure"] = json!(error.to_string());
+        }
+        report["cases"]
+            .as_array_mut()
+            .expect("capacity cases")
+            .push(evidence);
+        outcome?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires explicitly configured native Hub and real pinned GPU runtime; two capacity calls"]
+async fn native_hub_real_embedding_capacity_and_usage() -> Result<()> {
+    let installation = Installation::load()?;
+    ensure!(
+        !installation.report.exists(),
+        "choose a new report path; preserve earlier receipts"
+    );
+    let mut report = json!({"scenario":"native_hub_real_embedding_token_capacity",
+        "startedAt":chrono::Utc::now(),"runnerSourceSha256":digest(include_bytes!("acceptance.rs")),
+        "agentModel":"none; deterministic Rust native client","hubOrigin":installation.origin,
+        "profile":installation.profile,
+        "expectedCaller":{"tenant":installation.tenant,"principal":installation.principal,"workContext":installation.context},
+        "sequence":[],"cases":[],"status":"in_progress",
+        "proofLimits":["Real capacity calls use the exact public runtime token-ceiling input recipes through the native Hub SDK; tokenizer totals are checked against the pinned-model expectations.",
+            "Ordered indices/purposes, complete output, finite 768-dimensional unit vectors and exact per-item tokens are validated; no separate per-item execution trace is claimed.",
+            "Native own-usage exposes authenticated caller tenant and principal/kind/phase/token totals, not request-level context/delegation or declaration metadata.",
+            "Exact per-case deltas require other embedding activity for this principal paused; they do not independently prove exclusive attribution.",
+            "Output bytes/hashes cover compact structured-output reserialization, not HTTP wire bytes.",
+            "Busy and disconnect handling are not exercised here; those remain separately recorded Mac/common-code qualification."]});
+    let started = Instant::now();
+    let outcome = run_capacity(&installation, &mut report).await;
+    report["elapsedMs"] = json!(elapsed(started));
+    report["status"] = json!(if outcome.is_ok() { "passed" } else { "failed" });
+    if let Err(error) = &outcome {
+        report["failure"] = json!(error.to_string());
+    }
+    let bytes = serde_json::to_vec_pretty(&report)?;
+    ensure!(
+        bytes.len() <= MAX_EVIDENCE_BYTES,
+        "report exceeds byte bound"
+    );
+    use std::io::Write as _;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&installation.report)?;
+    file.write_all(&bytes)?;
+    eprintln!(
+        "Embedding capacity report: {} ({} bytes, {})",
+        installation.report.display(),
+        bytes.len(),
+        digest(&bytes)
+    );
+    outcome
+}
+
 #[tokio::test]
 #[ignore = "requires explicitly configured native Hub and real pinned GPU runtime"]
 async fn native_hub_real_embedding_corpus_and_usage() -> Result<()> {
@@ -577,6 +805,59 @@ async fn native_hub_real_embedding_corpus_and_usage() -> Result<()> {
         digest(&bytes)
     );
     outcome
+}
+
+#[test]
+fn capacity_recipes_preserve_public_input_bytes_and_exact_token_expectations() -> Result<()> {
+    let cases = capacity_cases();
+    for case in &cases {
+        case.input
+            .validate()
+            .map_err(|_| anyhow!("invalid capacity input"))?;
+        ensure!(
+            case.input.items.len() == case.expected_tokens.len(),
+            "token count length differs"
+        );
+        for (index, item) in case.input.items.iter().enumerate() {
+            let EmbeddingInput::Document { content, title } = item else {
+                bail!("capacity recipe purpose differs");
+            };
+            if case.expected_tokens[index] == MAX_ITEM_TOKENS {
+                ensure!(
+                    content.len() == 16360
+                        && digest(content.as_bytes())
+                            == "sha256:20c36711eccc025c3c2e6f2b4ea898ef38e675546a927a41f647bd9f4ea9bb62",
+                    "long document bytes differ from published runtime fixture"
+                );
+                let expected_title = if index == 0 {
+                    "Token ceiling document A"
+                } else {
+                    "Token ceiling document B"
+                };
+                ensure!(
+                    title.as_deref() == Some(expected_title),
+                    "long document title/order differs"
+                );
+            } else {
+                ensure!(
+                    case.expected_tokens[index] == 15
+                        && content == &format!("short input item {index}")
+                        && title.as_deref() == Some(format!("short-{index}").as_str()),
+                    "short document bytes/order differ from published runtime fixture"
+                );
+            }
+        }
+    }
+    ensure!(
+        cases[0].expected_tokens == [8192, 8192]
+            && cases[0].expected_tokens.iter().sum::<u64>() == MAX_BATCH_TOKENS
+            && cases[1].expected_tokens == [8192, 15, 15, 15, 15, 15, 15, 15]
+            && cases[1].expected_tokens.iter().sum::<u64>() == 8297,
+        "capacity token expectations differ"
+    );
+    // This verifies the public recipe, not tokenizer/model execution. Only the
+    // explicitly ignored native test can establish the real token counts.
+    Ok(())
 }
 
 #[test]
