@@ -7,7 +7,9 @@
 //! Optional READ_ONLY_BEARER_ENV selects an existing restricted identity; absence is
 //! reported as unavailable, never provisioned. Optional BASELINE_REPORT selects a
 //! prior report from this runner for Mac/Linux parity. No IdP/Hub issuer equivalence
-//! is assumed. Optional VEOVEO_ACCEPTANCE_CA_FILE appends a PEM CA bundle to normal
+//! is assumed. The report must be new and its parent must already exist. Output is
+//! reserved and the optional baseline validated in memory before any Hub request.
+//! Optional VEOVEO_ACCEPTANCE_CA_FILE appends a PEM CA bundle to normal
 //! certificate trust, retaining hostname verification (local gateway CA only).
 //! Run serially with other embedding calls for this principal paused:
 //! cargo nextest run --test acceptance --run-ignored only --test-threads 1
@@ -21,7 +23,8 @@
 #![cfg(feature = "server")]
 
 use std::{
-    path::PathBuf,
+    future::Future,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
@@ -294,6 +297,82 @@ fn digest(bytes: &[u8]) -> String {
 fn elapsed(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1000.0
 }
+
+fn load_baseline(path: Option<&Path>) -> Result<Option<EmbeddingResult>> {
+    let Some(path) = path else { return Ok(None) };
+    use std::io::Read as _;
+    let file = std::fs::File::open(path).context("cannot open baseline report")?;
+    let mut bytes = Vec::new();
+    file.take(MAX_EVIDENCE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .context("cannot read baseline report")?;
+    ensure!(
+        bytes.len() <= MAX_EVIDENCE_BYTES,
+        "baseline report exceeds byte bound"
+    );
+    let baseline: Value =
+        serde_json::from_slice(&bytes).map_err(|_| anyhow!("baseline report is not valid JSON"))?;
+    ensure!(
+        baseline["status"] == "passed" && baseline["inputs"] == serde_json::to_value(corpus())?,
+        "baseline status/corpus differs"
+    );
+    let reference: EmbeddingResult = serde_json::from_value(baseline["output"].clone())
+        .map_err(|_| anyhow!("baseline output is not the typed embedding contract"))?;
+    validate_result(
+        &reference,
+        &RuntimeRequest {
+            request_id: reference.request_id,
+            items: corpus().items,
+        },
+        &reference.execution.device,
+    )?;
+    Ok(Some(reference))
+}
+
+async fn run_with_evidence<F, Fut>(
+    report_path: &Path,
+    baseline_path: Option<&Path>,
+    report: Value,
+    runner: F,
+) -> Result<()>
+where
+    F: FnOnce(Option<EmbeddingResult>, Value) -> Fut,
+    Fut: Future<Output = (Value, Result<()>)>,
+{
+    // Reserve the output before baseline validation or any live operation. Never
+    // create missing directories or overwrite an earlier qualification receipt.
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(report_path)
+        .context("cannot reserve new report file; parent must exist and report must not exist")?;
+    let started = Instant::now();
+    let (mut report, outcome) = match load_baseline(baseline_path) {
+        Ok(baseline) => runner(baseline, report).await,
+        Err(error) => (report, Err(error)),
+    };
+    report["elapsedMs"] = json!(elapsed(started));
+    report["status"] = json!(if outcome.is_ok() { "passed" } else { "failed" });
+    if let Err(error) = &outcome {
+        report["failure"] = json!(error.to_string());
+    }
+    let bytes = serde_json::to_vec_pretty(&report)?;
+    ensure!(
+        bytes.len() <= MAX_EVIDENCE_BYTES,
+        "report exceeds byte bound"
+    );
+    use std::io::Write as _;
+    file.write_all(&bytes)
+        .context("cannot write reserved report file")?;
+    eprintln!(
+        "Embedding acceptance report: {} ({} bytes, {})",
+        report_path.display(),
+        bytes.len(),
+        digest(&bytes)
+    );
+    outcome
+}
+
 fn record(report: &mut Value, method: &str, started: Instant, detail: Value) {
     let steps = report["sequence"].as_array_mut().expect("sequence");
     steps.push(json!({"sequence":steps.len()+1,"method":method,"elapsedMs":elapsed(started),"detail":detail}));
@@ -518,7 +597,11 @@ fn parity(reference: &EmbeddingResult, current: &EmbeddingResult) -> Result<Valu
     )
 }
 
-async fn run(installation: &Installation, report: &mut Value) -> Result<()> {
+async fn run(
+    installation: &Installation,
+    baseline: Option<&EmbeddingResult>,
+    report: &mut Value,
+) -> Result<()> {
     let client = installation.client(&installation.member)?;
     let started = Instant::now();
     let tools = match client.tools().await {
@@ -696,26 +779,8 @@ async fn run(installation: &Installation, report: &mut Value) -> Result<()> {
     } else {
         report["insufficientPermissionCase"] = json!({"status":"unavailable","reason":"no existing read-only bearer supplied; current member role includes write; no grants were added"});
     }
-    if let Some(path) = &installation.baseline {
-        ensure!(
-            std::fs::metadata(path)?.len() <= MAX_EVIDENCE_BYTES as u64,
-            "baseline report exceeds byte bound"
-        );
-        let baseline: Value = serde_json::from_slice(&std::fs::read(path)?)?;
-        ensure!(
-            baseline["status"] == "passed" && baseline["inputs"] == report["inputs"],
-            "baseline status/corpus differs"
-        );
-        let reference: EmbeddingResult = serde_json::from_value(baseline["output"].clone())?;
-        validate_result(
-            &reference,
-            &RuntimeRequest {
-                request_id: reference.request_id,
-                items: corpus().items,
-            },
-            &reference.execution.device,
-        )?;
-        report["crossDeviceParity"] = parity(&reference, &output)?;
+    if let Some(reference) = baseline {
+        report["crossDeviceParity"] = parity(reference, &output)?;
     } else {
         report["crossDeviceParity"] = json!({"status":"not_requested","reason":"supply prior native Hub acceptance report on the second device"});
     }
@@ -873,11 +938,7 @@ async fn run_capacity(installation: &Installation, report: &mut Value) -> Result
 #[ignore = "requires explicitly configured native Hub and real pinned GPU runtime; two capacity calls"]
 async fn native_hub_real_embedding_capacity_and_usage() -> Result<()> {
     let installation = Installation::load()?;
-    ensure!(
-        !installation.report.exists(),
-        "choose a new report path; preserve earlier receipts"
-    );
-    let mut report = json!({"scenario":"native_hub_real_embedding_token_capacity",
+    let report = json!({"scenario":"native_hub_real_embedding_token_capacity",
         "startedAt":chrono::Utc::now(),"runnerSourceSha256":digest(include_bytes!("acceptance.rs")),
         "agentModel":"none; deterministic Rust native client","hubOrigin":installation.origin,
         "profile":installation.profile,
@@ -889,72 +950,150 @@ async fn native_hub_real_embedding_capacity_and_usage() -> Result<()> {
             "Exact per-case deltas require other embedding activity for this principal paused; they do not independently prove exclusive attribution.",
             "Output bytes/hashes cover compact structured-output reserialization, not HTTP wire bytes.",
             "Busy and disconnect handling are not exercised here; those remain separately recorded Mac/common-code qualification."]});
-    let started = Instant::now();
-    let outcome = run_capacity(&installation, &mut report).await;
-    report["elapsedMs"] = json!(elapsed(started));
-    report["status"] = json!(if outcome.is_ok() { "passed" } else { "failed" });
-    if let Err(error) = &outcome {
-        report["failure"] = json!(error.to_string());
-    }
-    let bytes = serde_json::to_vec_pretty(&report)?;
-    ensure!(
-        bytes.len() <= MAX_EVIDENCE_BYTES,
-        "report exceeds byte bound"
-    );
-    use std::io::Write as _;
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&installation.report)?;
-    file.write_all(&bytes)?;
-    eprintln!(
-        "Embedding capacity report: {} ({} bytes, {})",
-        installation.report.display(),
-        bytes.len(),
-        digest(&bytes)
-    );
-    outcome
+    let installation = &installation;
+    run_with_evidence(
+        &installation.report,
+        installation.baseline.as_deref(),
+        report,
+        |_, mut report| async move {
+            let outcome = run_capacity(installation, &mut report).await;
+            (report, outcome)
+        },
+    )
+    .await
 }
 
 #[tokio::test]
 #[ignore = "requires explicitly configured native Hub and real pinned GPU runtime"]
 async fn native_hub_real_embedding_corpus_and_usage() -> Result<()> {
     let installation = Installation::load()?;
-    ensure!(
-        !installation.report.exists(),
-        "choose a new report path; preserve earlier receipts"
-    );
-    let mut report = json!({"scenario":"native_hub_real_embedding_six_item","startedAt":chrono::Utc::now(),
+    let report = json!({"scenario":"native_hub_real_embedding_six_item","startedAt":chrono::Utc::now(),
         "runnerSourceSha256":digest(include_bytes!("acceptance.rs")),"agentModel":"none; deterministic Rust native client",
         "hubOrigin":installation.origin,"profile":installation.profile,
         "expectedCaller":{"tenant":installation.tenant,"principal":installation.principal,"workContext":installation.context},
         "inputs":corpus(),"sequence":[],"status":"in_progress",
         "proofLimits":["Native own-usage API scopes to the authenticated caller tenant and exposes principal/kind/phase/token totals, not individual request attribution.","Expected tenant/context are trusted fixture inputs; live work-context/delegation and kind-declaration metadata are not exposed by this daily API. Native component tests cover draft attribution/declaration.","Exact bounded deltas require other embedding activity for this same principal paused; they do not independently prove exclusive attribution.","Not-started is the runtime's explicit typed assertion plus zero actual ledger usage, not an independent GPU dispatch counter.","Output byte/hash evidence is compact structured-output reserialization, not captured HTTP wire bytes."]});
-    let started = Instant::now();
-    let outcome = run(&installation, &mut report).await;
-    report["elapsedMs"] = json!(elapsed(started));
-    report["status"] = json!(if outcome.is_ok() { "passed" } else { "failed" });
-    if let Err(error) = &outcome {
-        report["failure"] = json!(error.to_string());
+    let installation = &installation;
+    run_with_evidence(
+        &installation.report,
+        installation.baseline.as_deref(),
+        report,
+        |baseline, mut report| async move {
+            let outcome = run(installation, baseline.as_ref(), &mut report).await;
+            (report, outcome)
+        },
+    )
+    .await
+}
+
+#[tokio::test]
+async fn evidence_preflight_prevents_live_entry_and_preserves_failed_receipts() -> Result<()> {
+    // This fixture owns only its fresh temporary directory, never deployed evidence.
+    struct Fixture(PathBuf);
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
-    let bytes = serde_json::to_vec_pretty(&report)?;
+    let fixture =
+        Fixture(std::env::temp_dir().join(format!("embedding-evidence-{}", uuid::Uuid::now_v7())));
+    std::fs::create_dir(&fixture.0)?;
+    let entered = std::cell::Cell::new(false);
+    let empty_report =
+        || json!({"scenario":"synthetic_local_preflight","sequence":[],"status":"in_progress"});
+    let missing_baseline = fixture.0.join("missing-baseline.json");
+    let report = fixture.0.join("failed-baseline.json");
+    let result = run_with_evidence(
+        &report,
+        Some(&missing_baseline),
+        empty_report(),
+        |_, report| {
+            entered.set(true);
+            std::future::ready((report, Ok(())))
+        },
+    )
+    .await;
     ensure!(
-        bytes.len() <= MAX_EVIDENCE_BYTES,
-        "report exceeds byte bound"
+        result.is_err() && !entered.get(),
+        "missing baseline entered live runner"
     );
-    use std::io::Write as _;
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&installation.report)?;
-    file.write_all(&bytes)?;
-    eprintln!(
-        "Embedding acceptance report: {} ({} bytes, {})",
-        installation.report.display(),
-        bytes.len(),
-        digest(&bytes)
+    let evidence: Value = serde_json::from_slice(&std::fs::read(&report)?)?;
+    ensure!(
+        evidence["status"] == "failed"
+            && evidence["sequence"] == json!([])
+            && evidence["failure"] == "cannot open baseline report",
+        "missing baseline lost failure evidence"
     );
-    outcome
+
+    let bad_baseline = fixture.0.join("bad-baseline.json");
+    for (index, bytes) in [
+        b"{".to_vec(),
+        serde_json::to_vec(&json!({"status":"failed","inputs":corpus()}))?,
+        serde_json::to_vec(&json!({"status":"passed","inputs":{"items":[]}}))?,
+        serde_json::to_vec(&json!({"status":"passed","inputs":corpus(),"output":{}}))?,
+        vec![b' '; MAX_EVIDENCE_BYTES + 1],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        std::fs::write(&bad_baseline, bytes)?;
+        let bad_report = fixture.0.join(format!("bad-baseline-{index}.json"));
+        let result = run_with_evidence(
+            &bad_report,
+            Some(&bad_baseline),
+            empty_report(),
+            |_, report| {
+                entered.set(true);
+                std::future::ready((report, Ok(())))
+            },
+        )
+        .await;
+        let evidence: Value = serde_json::from_slice(&std::fs::read(bad_report)?)?;
+        ensure!(
+            result.is_err()
+                && !entered.get()
+                && evidence["status"] == "failed"
+                && evidence["sequence"] == json!([]),
+            "invalid baseline entered runner or lost evidence"
+        );
+    }
+
+    let missing_parent = fixture.0.join("absent/report.json");
+    let result = run_with_evidence(&missing_parent, None, empty_report(), |_, report| {
+        entered.set(true);
+        std::future::ready((report, Ok(())))
+    })
+    .await;
+    ensure!(
+        result.is_err() && !entered.get() && !missing_parent.exists(),
+        "missing report parent entered live runner or was created implicitly"
+    );
+    let before = std::fs::read(&report)?;
+    let result = run_with_evidence(&report, None, empty_report(), |_, report| {
+        entered.set(true);
+        std::future::ready((report, Ok(())))
+    })
+    .await;
+    ensure!(
+        result.is_err() && !entered.get() && std::fs::read(&report)? == before,
+        "existing evidence was overwritten or runner entered"
+    );
+
+    let live_failure = fixture.0.join("failed-runner.json");
+    let result = run_with_evidence(&live_failure, None, empty_report(), |_, report| {
+        entered.set(true);
+        std::future::ready((report, Err(anyhow!("synthetic runner failure"))))
+    })
+    .await;
+    let evidence: Value = serde_json::from_slice(&std::fs::read(live_failure)?)?;
+    ensure!(
+        result.is_err()
+            && entered.get()
+            && evidence["status"] == "failed"
+            && evidence["failure"] == "synthetic runner failure",
+        "runner failure lost reserved evidence"
+    );
+    Ok(())
 }
 
 #[test]
