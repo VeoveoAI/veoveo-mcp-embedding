@@ -33,6 +33,73 @@ struct Rejection {
     request_id: Option<uuid::Uuid>,
 }
 
+// Closed diagnostics only: never retain or format a reqwest error (which can
+// contain its authenticated destination), response body, headers or caller input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Operation {
+    Capabilities,
+    Ready,
+    Embed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stage {
+    Send,
+    Status,
+    RejectionProvenance,
+    ResponseLength,
+    Body,
+    Json,
+    Contract,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct TransportFlags {
+    connect: bool,
+    timeout: bool,
+    request: bool,
+    body: bool,
+    decode: bool,
+    redirect: bool,
+    status: bool,
+}
+
+impl TransportFlags {
+    fn classify(error: &reqwest::Error) -> Self {
+        Self {
+            connect: error.is_connect(),
+            timeout: error.is_timeout(),
+            request: error.is_request(),
+            body: error.is_body(),
+            decode: error.is_decode(),
+            redirect: error.is_redirect(),
+            status: error.is_status(),
+        }
+    }
+}
+
+fn diagnose(
+    operation: Operation,
+    stage: Stage,
+    http_status: Option<u16>,
+    error: Option<&reqwest::Error>,
+) {
+    let flags = error.map(TransportFlags::classify).unwrap_or_default();
+    tracing::warn!(
+        operation = ?operation,
+        stage = ?stage,
+        http_status,
+        is_connect = flags.connect,
+        is_timeout = flags.timeout,
+        is_request = flags.request,
+        is_body = flags.body,
+        is_decode = flags.decode,
+        is_redirect = flags.redirect,
+        is_status = flags.status,
+        "private runtime failure classification"
+    );
+}
+
 impl RuntimeClient {
     pub fn expected_device(&self) -> &Device {
         &self.device
@@ -77,12 +144,24 @@ impl RuntimeClient {
             .request(reqwest::Method::GET, "capabilities")
             .send()
             .await
-            .map_err(|_| RuntimeError::Ambiguous)?;
+            .map_err(|error| {
+                diagnose(Operation::Capabilities, Stage::Send, None, Some(&error));
+                RuntimeError::Ambiguous
+            })?;
         if !response.status().is_success() {
+            diagnose(
+                Operation::Capabilities,
+                Stage::Status,
+                Some(response.status().as_u16()),
+                None,
+            );
             return Err(RuntimeError::Ambiguous);
         }
-        let value: Capabilities = bounded_json(response, 16384).await?;
-        validate_capabilities(&value, &self.device)?;
+        let status = response.status().as_u16();
+        let value: Capabilities = bounded_json(response, 16384, Operation::Capabilities).await?;
+        validate_capabilities(&value, &self.device).inspect_err(|_| {
+            diagnose(Operation::Capabilities, Stage::Contract, Some(status), None);
+        })?;
         Ok(value)
     }
 
@@ -93,10 +172,19 @@ impl RuntimeClient {
                 .request(reqwest::Method::GET, "readyz")
                 .send()
                 .await
-                .map_err(|_| RuntimeError::Ambiguous)?;
+                .map_err(|error| {
+                    diagnose(Operation::Ready, Stage::Send, None, Some(&error));
+                    RuntimeError::Ambiguous
+                })?;
             if response.status().is_success() {
                 Ok(())
             } else {
+                diagnose(
+                    Operation::Ready,
+                    Stage::Status,
+                    Some(response.status().as_u16()),
+                    None,
+                );
                 Err(RuntimeError::Ambiguous)
             }
         })
@@ -110,10 +198,13 @@ impl RuntimeClient {
             .json(request)
             .send()
             .await
-            .map_err(|_| RuntimeError::Ambiguous)?;
+            .map_err(|error| {
+                diagnose(Operation::Embed, Stage::Send, None, Some(&error));
+                RuntimeError::Ambiguous
+            })?;
         if !response.status().is_success() {
             let status = response.status();
-            let error = bounded_json::<Rejection>(response, 4096).await;
+            let error = bounded_json::<Rejection>(response, 4096, Operation::Embed).await;
             if let Ok(error) = error
                 && error.execution == "not_started"
                 && error.title.status() == status.as_u16()
@@ -122,10 +213,19 @@ impl RuntimeClient {
             {
                 return Err(RuntimeError::NotStarted(error.title));
             }
+            diagnose(
+                Operation::Embed,
+                Stage::RejectionProvenance,
+                Some(status.as_u16()),
+                None,
+            );
             return Err(RuntimeError::Ambiguous);
         }
-        let value = bounded_json(response, MAX_RESPONSE_BYTES).await?;
-        validate_result(&value, request, &self.device)?;
+        let status = response.status().as_u16();
+        let value = bounded_json(response, MAX_RESPONSE_BYTES, Operation::Embed).await?;
+        validate_result(&value, request, &self.device).inspect_err(|_| {
+            diagnose(Operation::Embed, Stage::Contract, Some(status), None);
+        })?;
         Ok(value)
     }
 }
@@ -133,25 +233,31 @@ impl RuntimeClient {
 async fn bounded_json<T: DeserializeOwned>(
     mut response: reqwest::Response,
     limit: usize,
+    operation: Operation,
 ) -> Result<T, RuntimeError> {
+    let status = response.status().as_u16();
     if response
         .content_length()
         .is_some_and(|length| length > limit as u64)
     {
+        diagnose(operation, Stage::ResponseLength, Some(status), None);
         return Err(RuntimeError::InvalidResponse);
     }
     let mut bytes = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| RuntimeError::Ambiguous)?
-    {
+    while let Some(chunk) = response.chunk().await.map_err(|error| {
+        diagnose(operation, Stage::Body, Some(status), Some(&error));
+        RuntimeError::Ambiguous
+    })? {
         if bytes.len().saturating_add(chunk.len()) > limit {
+            diagnose(operation, Stage::ResponseLength, Some(status), None);
             return Err(RuntimeError::InvalidResponse);
         }
         bytes.extend_from_slice(&chunk);
     }
-    serde_json::from_slice(&bytes).map_err(|_| RuntimeError::InvalidResponse)
+    serde_json::from_slice(&bytes).map_err(|_| {
+        diagnose(operation, Stage::Json, Some(status), None);
+        RuntimeError::InvalidResponse
+    })
 }
 
 fn identity(
@@ -256,7 +362,134 @@ pub fn validate_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        collections::BTreeMap,
+        sync::{Arc, Mutex},
+    };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tracing::instrument::WithSubscriber as _;
+
+    #[derive(Clone, Default)]
+    struct Diagnostics(Arc<Mutex<Vec<BTreeMap<String, String>>>>);
+
+    impl tracing::Subscriber for Diagnostics {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            struct Fields(BTreeMap<String, String>);
+            impl tracing::field::Visit for Fields {
+                fn record_debug(
+                    &mut self,
+                    field: &tracing::field::Field,
+                    value: &dyn std::fmt::Debug,
+                ) {
+                    self.0.insert(field.name().into(), format!("{value:?}"));
+                }
+            }
+            if event.metadata().target() == module_path!().trim_end_matches("::tests") {
+                let mut fields = Fields(BTreeMap::new());
+                event.record(&mut fields);
+                self.0.lock().unwrap().push(fields.0);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn diagnostics_classify_transport_body_and_status_without_private_data() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        // All payloads/credentials below are synthetic; no model or native provider.
+        let request = RuntimeRequest {
+            request_id: uuid::Uuid::now_v7(),
+            items: vec![EmbeddingInput::SearchQuery {
+                text: "synthetic-private-input".into(),
+            }],
+        };
+        let capture = Diagnostics::default();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        drop(listener);
+        let client = RuntimeClient::new(
+            origin,
+            SecretString::from("synthetic-private-credential"),
+            Device::Mps,
+        )
+        .unwrap();
+        let result = client
+            .embed(&request)
+            .with_subscriber(capture.clone())
+            .await;
+        assert!(matches!(result, Err(RuntimeError::Ambiguous)));
+        let send = capture.0.lock().unwrap().last().unwrap().clone();
+        assert_eq!(send["operation"], "Embed");
+        assert_eq!(send["stage"], "Send");
+        assert_eq!(send["is_connect"], "true");
+        assert_eq!(send["is_request"], "true");
+
+        let (origin, task) = peer("200 OK", "", "synthetic-private-response", Some(1000)).await;
+        let client = RuntimeClient::new(
+            origin,
+            SecretString::from("synthetic-private-credential"),
+            Device::Mps,
+        )
+        .unwrap();
+        let result = client
+            .embed(&request)
+            .with_subscriber(capture.clone())
+            .await;
+        assert!(matches!(result, Err(RuntimeError::Ambiguous)));
+        task.await.unwrap();
+        let body = capture.0.lock().unwrap().last().unwrap().clone();
+        assert_eq!(body["stage"], "Body");
+        assert_eq!(body["http_status"], "200");
+        assert_eq!(body["is_decode"], "true");
+
+        let (origin, task) = peer("502 Bad Gateway", "", "{}", None).await;
+        let client = RuntimeClient::new(
+            origin,
+            SecretString::from("synthetic-private-credential"),
+            Device::Mps,
+        )
+        .unwrap();
+        let result = client
+            .embed(&request)
+            .with_subscriber(capture.clone())
+            .await;
+        assert!(matches!(result, Err(RuntimeError::Ambiguous)));
+        task.await.unwrap();
+        let rejection = capture.0.lock().unwrap().last().unwrap().clone();
+        assert_eq!(rejection["stage"], "RejectionProvenance");
+        assert_eq!(rejection["http_status"], "502");
+
+        let allowed = [
+            "message",
+            "operation",
+            "stage",
+            "http_status",
+            "is_connect",
+            "is_timeout",
+            "is_request",
+            "is_body",
+            "is_decode",
+            "is_redirect",
+            "is_status",
+        ];
+        for fields in capture.0.lock().unwrap().iter() {
+            assert!(fields.keys().all(|name| allowed.contains(&name.as_str())));
+            for value in fields.values() {
+                assert!(!value.contains("synthetic-private"));
+                assert!(!value.contains("http://"));
+                assert!(!value.contains("127.0.0.1"));
+            }
+        }
+    }
 
     /// Synthetic HTTP peer only; it never performs inference or resolves a credential.
     async fn peer(
