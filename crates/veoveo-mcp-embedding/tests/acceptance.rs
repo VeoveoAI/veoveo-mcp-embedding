@@ -124,6 +124,7 @@ impl Installation {
                 std::env::var("VEOVEO_ACCEPTANCE_PROFILE").unwrap_or_else(|_| "local".into()),
             )?,
             http: reqwest::Client::builder()
+                .user_agent("veoveo-reference-qualification/1.0")
                 .redirect(reqwest::redirect::Policy::none())
                 .retry(reqwest::retry::never())
                 .timeout(DEADLINE)
@@ -229,7 +230,7 @@ async fn bounded_bytes(mut response: reqwest::Response) -> Result<Vec<u8>> {
 }
 
 fn digest(bytes: &[u8]) -> String {
-    format!("sha256:{:x}", Sha256::digest(bytes))
+    veoveo_types::Sha256Digest::from_bytes(Sha256::digest(bytes).into()).to_string()
 }
 fn elapsed(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1000.0
