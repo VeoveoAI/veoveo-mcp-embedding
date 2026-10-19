@@ -7,7 +7,9 @@
 //! Optional READ_ONLY_BEARER_ENV selects an existing restricted identity; absence is
 //! reported as unavailable, never provisioned. Optional BASELINE_REPORT selects a
 //! prior report from this runner for Mac/Linux parity. No IdP/Hub issuer equivalence
-//! is assumed. Run serially with other embedding calls for this principal paused:
+//! is assumed. Optional VEOVEO_ACCEPTANCE_CA_FILE appends a PEM CA bundle to normal
+//! certificate trust, retaining hostname verification (local gateway CA only).
+//! Run serially with other embedding calls for this principal paused:
 //! cargo nextest run --test acceptance --run-ignored only --test-threads 1
 //!
 //! Reports intentionally contain the fixed public corpus and real vectors, as
@@ -118,17 +120,26 @@ impl Installation {
             "cuda" => Device::Cuda,
             _ => bail!("DEVICE must be mps or cuda"),
         };
+        let mut http = reqwest::Client::builder()
+            .user_agent("veoveo-reference-qualification/1.0")
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
+            .timeout(DEADLINE);
+        if let Some(path) = std::env::var_os("VEOVEO_ACCEPTANCE_CA_FILE") {
+            let pem = std::fs::read(path).context("cannot read acceptance CA file")?;
+            let certificates = reqwest::Certificate::from_pem_bundle(&pem)
+                .context("invalid acceptance PEM CA bundle")?;
+            ensure!(!certificates.is_empty(), "acceptance CA bundle is empty");
+            for certificate in certificates {
+                http = http.add_root_certificate(certificate);
+            }
+        }
         Ok(Self {
             origin,
             profile: HubProfileId::parse(
                 std::env::var("VEOVEO_ACCEPTANCE_PROFILE").unwrap_or_else(|_| "local".into()),
             )?,
-            http: reqwest::Client::builder()
-                .user_agent("veoveo-reference-qualification/1.0")
-                .redirect(reqwest::redirect::Policy::none())
-                .retry(reqwest::retry::never())
-                .timeout(DEADLINE)
-                .build()?,
+            http: http.build()?,
             member,
             restricted,
             principal: PrincipalId::parse(required("PRINCIPAL")?)?,
