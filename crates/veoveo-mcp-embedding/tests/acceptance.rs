@@ -403,18 +403,24 @@ async fn run(installation: &Installation, report: &mut Value) -> Result<()> {
         .tools()
         .await
         .map_err(|_| anyhow!("native Hub discovery failed"))?;
+    record(
+        report,
+        "tools/list",
+        started,
+        json!({"embeddingAdvertised":tools.items.iter().any(|tool| tool.name == "embedding__embed"),
+            "catalogComplete":tools.is_complete(),"toolCount":tools.items.len(),
+            "toolNames":tools.items.iter().take(256).map(|tool| tool.name.as_ref()).collect::<Vec<_>>(),
+            "toolNamesTruncated":tools.items.len()>256,
+            "degradation":tools.degradation.failures.iter().take(256).map(|failure|
+                json!({"server":failure.server,"surface":failure.surface,"code":failure.code})).collect::<Vec<_>>(),
+            "degradationTruncated":tools.degradation.failures.len()>256}),
+    );
     ensure!(
         tools
             .items
             .iter()
             .any(|tool| tool.name == "embedding__embed"),
         "embedding tool absent from authenticated discovery"
-    );
-    record(
-        report,
-        "tools/list",
-        started,
-        json!({"embeddingAdvertised":true,"catalogComplete":tools.is_complete()}),
     );
     let started = Instant::now();
     let capabilities = client
@@ -669,18 +675,24 @@ async fn run_capacity(installation: &Installation, report: &mut Value) -> Result
         .tools()
         .await
         .map_err(|_| anyhow!("native Hub capacity discovery failed"))?;
+    record(
+        report,
+        "tools/list",
+        started,
+        json!({"embeddingAdvertised":tools.items.iter().any(|tool| tool.name == "embedding__embed"),
+            "catalogComplete":tools.is_complete(),"toolCount":tools.items.len(),
+            "toolNames":tools.items.iter().take(256).map(|tool| tool.name.as_ref()).collect::<Vec<_>>(),
+            "toolNamesTruncated":tools.items.len()>256,
+            "degradation":tools.degradation.failures.iter().take(256).map(|failure|
+                json!({"server":failure.server,"surface":failure.surface,"code":failure.code})).collect::<Vec<_>>(),
+            "degradationTruncated":tools.degradation.failures.len()>256}),
+    );
     ensure!(
         tools
             .items
             .iter()
             .any(|tool| tool.name == "embedding__embed"),
         "embedding tool absent from authenticated capacity discovery"
-    );
-    record(
-        report,
-        "tools/list",
-        started,
-        json!({"embeddingAdvertised":true,"catalogComplete":tools.is_complete()}),
     );
     let started = Instant::now();
     let capabilities = client
