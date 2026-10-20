@@ -4,11 +4,17 @@ pub mod contract;
 #[cfg(feature = "server")]
 pub mod mcp;
 #[cfg(feature = "server")]
+pub mod protocol;
+#[cfg(feature = "server")]
 pub mod provider;
+#[cfg(feature = "server")]
+pub mod resolution;
 #[cfg(feature = "server")]
 pub mod server;
 #[cfg(feature = "server")]
 pub mod usage;
+#[cfg(feature = "server")]
+mod validation;
 
 pub fn component() -> &'static str {
     env!("CARGO_PKG_NAME")

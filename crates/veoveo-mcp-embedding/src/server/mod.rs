@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use veoveo_hub_sdk::{
     PublicDeployment, TelemetryGuard,
-    hosting::{Hosted, HostedServer},
+    hosting::{Hosted, HostedServer, ServerCalls},
     init_server_telemetry,
     registration::client::Registration,
 };
@@ -37,7 +37,7 @@ pub async fn run() -> Result<()> {
         .set(declaration.clone())
         .map_err(|_| anyhow::anyhow!("the registration was declared twice"))?;
     mcp::force_setup();
-    let (client, registration, http) = registration::register(&args, declaration).await?;
+    let (client, registration, http, calls) = registration::register(&args, declaration).await?;
     // The registration lasts while the server's login holds a live process instance.
     // Once serving ends, on SIGTERM or Ctrl-C or on a failure, the client deletes it,
     // which also drops the login.
@@ -45,7 +45,7 @@ pub async fn run() -> Result<()> {
     let mut served = None;
     let maintained = client
         .maintain(registration, async {
-            served = Some(serve(&args, &deployment, &issued, http).await);
+            served = Some(serve(&args, &deployment, &issued, http, calls).await);
         })
         .await;
     if let Err(error) = maintained {
@@ -61,6 +61,7 @@ async fn serve(
     deployment: &PublicDeployment,
     registration: &Registration,
     http: reqwest::Client,
+    calls: ServerCalls,
 ) -> Result<()> {
     let grant = registration
         .database()
@@ -102,6 +103,7 @@ async fn serve(
         .deployment(deployment, args.allow_loopback_hosts)?
         .allowed_hosts(args.allowed_hosts.iter().cloned())
         .internal_trust(registration.access_tokens(), http)?
+        .calls(calls)
         .handler(move || Hosted::new(domain.clone()))
         .mcp_request_limit(MAX_JSON_BYTES)
         .request_timeout(std::time::Duration::from_secs(65))

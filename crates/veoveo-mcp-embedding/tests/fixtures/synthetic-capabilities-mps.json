@@ -1,0 +1,112 @@
+{
+  "model": {
+    "id": "google/embeddinggemma-2",
+    "revision": "914f7f89142e33e77833254d9c9b90c3cef7303b"
+  },
+  "dimensions": 768,
+  "supportedDimensions": [
+    128,
+    256,
+    512,
+    768
+  ],
+  "normalized": true,
+  "modalities": [
+    "text",
+    "image",
+    "audio",
+    "video"
+  ],
+  "promptNames": [
+    "SearchQuery",
+    "CodeRetrieval",
+    "Document",
+    "QuestionAnswering",
+    "FactChecking",
+    "Classification",
+    "Clustering",
+    "SentenceSimilarity"
+  ],
+  "defaultPrompt": "",
+  "defaults": {
+    "image": {
+      "maxSoftTokens": 280
+    },
+    "audio": {
+      "truncation": false
+    },
+    "video": {
+      "fps": 1,
+      "maxFrames": 32,
+      "overflowStrategy": "uniform",
+      "maxSoftTokens": 140,
+      "addTimestamps": false,
+      "loadAudioFromVideo": false
+    }
+  },
+  "execution": {
+    "device": "mps",
+    "dtype": "float32",
+    "batchSize": 1
+  },
+  "runtime": {
+    "package": "veoveo-runtime-embedding",
+    "version": "0.1.0",
+    "sourceRevision": "0000000000000000000000000000000000000000",
+    "python": "3.14.6",
+    "sentenceTransformers": "6.1.0",
+    "transformers": "5.20.2",
+    "torch": "2.14.1",
+    "torchvision": "0.29.1",
+    "pillow": "13.0.0",
+    "torchcodec": "0.17.0",
+    "ffmpeg": {
+      "version": "8.1.1",
+      "libavfilter": [
+        11,
+        0,
+        100
+      ],
+      "libavutil": [
+        60,
+        0,
+        100
+      ],
+      "libavcodec": [
+        62,
+        0,
+        100
+      ],
+      "libavformat": [
+        62,
+        0,
+        100
+      ]
+    }
+  },
+  "limits": {
+    "maxItems": 8,
+    "maxPartsPerItem": 16,
+    "maxParts": 32,
+    "maxContentBytes": 65536,
+    "maxItemTokens": 8192,
+    "maxBatchTokens": 16384,
+    "maxArtifactBytes": 67108864,
+    "maxTransferBytes": 134217728,
+    "maxPixels": 16000000,
+    "maxTotalPixels": 64000000,
+    "maxSourceSeconds": 300,
+    "maxAudioSeconds": 600,
+    "maxVideoFps": 120,
+    "maxVideoFrames": 256
+  },
+  "processingSemantics": {
+    "limits": "Veoveo service admission bounds, not Google model capabilities",
+    "preprocessing": "Native CPU decoding, resampling, image patches and video sampling",
+    "dimensions": "Native Sentence Transformers truncation followed by normalization",
+    "videoTimestamps": "Native prompt uses frame index/source FPS; coverage also records actual decoded PTS",
+    "audioFromVideo": "Native soundtrack append; incompatible with separate audio parts",
+    "imageFrames": "Native first image frame only",
+    "textPlaceholders": "Reserved media markers are refused"
+  }
+}

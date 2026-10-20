@@ -5,7 +5,8 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, de::DeserializeOwned};
 use url::Url;
 
-use crate::contract::*;
+pub use crate::validation::{validate_capabilities, validate_public_result, validate_result};
+use crate::{contract::*, protocol::RuntimeRequest};
 
 #[derive(Clone)]
 pub struct RuntimeClient {
@@ -263,108 +264,47 @@ async fn bounded_json<T: DeserializeOwned>(
     })
 }
 
-fn identity(
-    model: &ModelIdentity,
-    processing: &str,
-    execution: &Execution,
-    runtime: &RuntimeIdentity,
-    device: &Device,
-) -> Result<(), RuntimeError> {
-    if model.id != MODEL_ID
-        || model.revision != MODEL_REVISION
-        || processing != PROCESSING_ID
-        || &execution.device != device
-        || execution.dtype != "float32"
-        || runtime.package != "veoveo-runtime-embedding"
-        || runtime.version != "0.1.0"
-        || runtime.python != "3.14.6"
-        || runtime.sentence_transformers != "6.1.0"
-        || runtime.transformers != "5.20.2"
-        || runtime.torch.split('+').next() != Some("2.14.1")
-        || runtime.torchvision.split('+').next() != Some("0.29.1")
-        || runtime.pillow != "13.0.0"
-        || runtime.source_revision.is_empty()
-        || runtime.source_revision.len() > 80
-    {
-        return Err(RuntimeError::InvalidResponse);
-    }
-    Ok(())
-}
-
-pub fn validate_capabilities(value: &Capabilities, device: &Device) -> Result<(), RuntimeError> {
-    identity(
-        &value.model,
-        &value.processing_id,
-        &value.execution,
-        &value.runtime,
-        device,
-    )?;
-    let limits = &value.limits;
-    if value.dimensions != DIMENSIONS
-        || !value.normalized
-        || value.purposes != [Purpose::SearchQuery, Purpose::CodeQuery, Purpose::Document]
-        || limits.max_items != MAX_ITEMS
-        || limits.max_content_bytes != MAX_CONTENT_BYTES
-        || limits.max_item_tokens != MAX_ITEM_TOKENS
-        || limits.max_batch_tokens != MAX_BATCH_TOKENS
-    {
-        return Err(RuntimeError::InvalidResponse);
-    }
-    Ok(())
-}
-
-pub fn validate_result(
-    value: &EmbeddingResult,
-    request: &RuntimeRequest,
-    device: &Device,
-) -> Result<(), RuntimeError> {
-    identity(
-        &value.model,
-        &value.processing_id,
-        &value.execution,
-        &value.runtime,
-        device,
-    )?;
-    if value.request_id != request.request_id
-        || value.dimensions != DIMENSIONS
-        || !value.normalized
-        || value.items.len() != request.items.len()
-    {
-        return Err(RuntimeError::InvalidResponse);
-    }
-    let mut tokens = 0_u64;
-    for (index, (item, input)) in value.items.iter().zip(&request.items).enumerate() {
-        if item.index != index
-            || item.purpose != input.purpose()
-            || item.vector.len() != DIMENSIONS
-            || item.token_count == 0
-            || item.token_count > MAX_ITEM_TOKENS
-            || item.vector.iter().any(|value| !value.is_finite())
-        {
-            return Err(RuntimeError::InvalidResponse);
-        }
-        let norm = item
-            .vector
-            .iter()
-            .map(|value| f64::from(*value).powi(2))
-            .sum::<f64>()
-            .sqrt();
-        if (norm - 1.0).abs() > 0.001 {
-            return Err(RuntimeError::InvalidResponse);
-        }
-        tokens = tokens
-            .checked_add(item.token_count)
-            .ok_or(RuntimeError::InvalidResponse)?;
-    }
-    if tokens > MAX_BATCH_TOKENS || tokens != value.usage.input_tokens {
-        return Err(RuntimeError::InvalidResponse);
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::{RuntimeItem, RuntimePart};
+    fn synthetic_request(text: &str) -> RuntimeRequest {
+        let input: EmbedRequest = serde_json::from_value(
+            serde_json::json!({"items":[{"content":[{"type":"text","text":text}]}]}),
+        )
+        .unwrap();
+        RuntimeRequest::new(
+            uuid::Uuid::now_v7(),
+            &input,
+            vec![RuntimeItem {
+                content: vec![RuntimePart::Text { text: text.into() }],
+            }],
+        )
+    }
+    fn synthetic_output(request: &RuntimeRequest, capabilities: &Capabilities) -> EmbeddingResult {
+        let mut vector = vec![0.0; usize::from(request.dimensions)];
+        vector[0] = 1.0;
+        EmbeddingResult {
+            request_id: request.request_id,
+            model: capabilities.model.clone(),
+            processing_id: request.processing_id().unwrap(),
+            dimensions: request.dimensions,
+            normalized: true,
+            execution: Execution {
+                device: Device::Mps,
+                dtype: "float32".into(),
+            },
+            runtime: capabilities.runtime.clone(),
+            processing: request.effective_processing(),
+            items: vec![Embedding {
+                index: 0,
+                vector,
+                token_count: 1,
+                media: vec![],
+            }],
+            usage: TokenUsage { input_tokens: 1 },
+        }
+    }
     use std::{
         collections::BTreeMap,
         sync::{Arc, Mutex},
@@ -409,12 +349,7 @@ mod tests {
     async fn diagnostics_classify_transport_body_and_status_without_private_data() {
         let _ = rustls::crypto::ring::default_provider().install_default();
         // All payloads/credentials below are synthetic; no model or native provider.
-        let request = RuntimeRequest {
-            request_id: uuid::Uuid::now_v7(),
-            items: vec![EmbeddingInput::SearchQuery {
-                text: "synthetic-private-input".into(),
-            }],
-        };
+        let request = synthetic_request("synthetic-private-input");
         let capture = Diagnostics::default();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let origin = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
@@ -500,40 +435,12 @@ mod tests {
         // Synthetic intermediary and unit vector only; no provider or inference.
         // It leaves the downstream socket open after its upstream expires at5s.
         // A POST on that old connection fails without a response, like stale EOF.
-        let capabilities: Capabilities = serde_json::from_value(serde_json::json!({
-            "model":{"id":MODEL_ID,"revision":MODEL_REVISION},"processingId":PROCESSING_ID,
-            "dimensions":DIMENSIONS,"normalized":true,"execution":{"device":"mps","dtype":"float32"},
-            "runtime":{"package":"veoveo-runtime-embedding","version":"0.1.0","sourceRevision":"synthetic",
-                "python":"3.14.6","sentenceTransformers":"6.1.0","transformers":"5.20.2",
-                "torch":"2.14.1","torchvision":"0.29.1","pillow":"13.0.0"},
-            "purposes":["search_query","code_query","document"],
-            "limits":{"maxItems":MAX_ITEMS,"maxContentBytes":MAX_CONTENT_BYTES,
-                "maxItemTokens":MAX_ITEM_TOKENS,"maxBatchTokens":MAX_BATCH_TOKENS}
-        })).unwrap();
-        let request = RuntimeRequest {
-            request_id: uuid::Uuid::now_v7(),
-            items: vec![EmbeddingInput::SearchQuery {
-                text: "synthetic".into(),
-            }],
-        };
-        let mut vector = vec![0.; DIMENSIONS];
-        vector[0] = 1.;
-        let output = EmbeddingResult {
-            request_id: request.request_id,
-            model: capabilities.model.clone(),
-            processing_id: capabilities.processing_id.clone(),
-            dimensions: DIMENSIONS,
-            normalized: true,
-            execution: capabilities.execution.clone(),
-            runtime: capabilities.runtime.clone(),
-            items: vec![Embedding {
-                index: 0,
-                purpose: Purpose::SearchQuery,
-                vector,
-                token_count: 1,
-            }],
-            usage: TokenUsage { input_tokens: 1 },
-        };
+        let capabilities: Capabilities = serde_json::from_str(include_str!(
+            "../tests/fixtures/synthetic-capabilities-mps.json"
+        ))
+        .unwrap();
+        let request = synthetic_request("synthetic");
+        let output = synthetic_output(&request, &capabilities);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let origin = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
         let cap_body = serde_json::to_string(&capabilities).unwrap();
@@ -677,12 +584,7 @@ mod tests {
                 Device::Mps,
             )
             .unwrap();
-            let request = RuntimeRequest {
-                request_id: uuid::Uuid::now_v7(),
-                items: vec![EmbeddingInput::SearchQuery {
-                    text: "synthetic text".into(),
-                }],
-            };
+            let request = synthetic_request("synthetic text");
             let error = tokio::time::timeout(Duration::from_secs(2), runtime.embed(&request))
                 .await
                 .unwrap()
@@ -758,12 +660,7 @@ mod tests {
                 false,
             ),
         ] {
-            let request = RuntimeRequest {
-                request_id: uuid::Uuid::now_v7(),
-                items: vec![EmbeddingInput::SearchQuery {
-                    text: "synthetic".into(),
-                }],
-            };
+            let request = synthetic_request("synthetic");
             let id = if wrong_id {
                 uuid::Uuid::now_v7()
             } else {

@@ -1,7 +1,9 @@
 //! Public contract only: no network, database, Tasks or model runtime.
+mod input;
 mod permissions;
 mod resource;
 mod types;
+pub use input::*;
 pub use permissions::*;
 pub use resource::*;
 pub use types::*;

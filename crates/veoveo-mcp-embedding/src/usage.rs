@@ -14,6 +14,7 @@ use veoveo_usage::{UsageActor, UsageDraft, UsageStore, UsageVia, UsageWrite};
 
 use crate::{
     contract::*,
+    protocol::RuntimeRequest,
     provider::{RuntimeClient, RuntimeError, validate_result},
 };
 
@@ -124,7 +125,9 @@ pub enum GenerationError {
         "delegated task identity cannot be represented by native usage accounting; inference not started"
     )]
     UnsupportedAttribution,
-    #[error("invalid embedding input")]
+    #[error(
+        "invalid embedding input or private payload bound; inference not started; no inference usage reserved"
+    )]
     InvalidInput,
     #[error("usage reservation failed before inference")]
     ReservationFailed,
@@ -147,11 +150,9 @@ pub async fn generate<R: EmbeddingRuntime, M: Meter>(
     actor: UsageActor,
     via: Option<UsageVia>,
 ) -> Result<EmbeddingResult, GenerationError> {
-    EmbedRequest {
-        items: request.items.clone(),
-    }
-    .validate()
-    .map_err(|_| GenerationError::InvalidInput)?;
+    request
+        .validate()
+        .map_err(|_| GenerationError::InvalidInput)?;
     let event = MeterEvent {
         request_id: request.request_id,
         actor,

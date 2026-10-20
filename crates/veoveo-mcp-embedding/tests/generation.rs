@@ -4,66 +4,19 @@ use std::sync::{
     Mutex,
     atomic::{AtomicUsize, Ordering},
 };
-use veoveo_mcp_embedding::{contract::*, provider::RuntimeError, usage::*};
+use veoveo_mcp_embedding::{
+    contract::*, protocol::RuntimeRequest, provider::RuntimeError, usage::*,
+};
+mod support;
+use support::{output, request};
 use veoveo_types::{PrincipalId, TenantId, WorkContextId};
 use veoveo_usage::{UsageActor, UsagePhase};
 
-fn request() -> RuntimeRequest {
-    RuntimeRequest {
-        request_id: uuid::Uuid::now_v7(),
-        items: vec![EmbeddingInput::CodeQuery {
-            text: "synthetic code".into(),
-        }],
-    }
-}
 fn actor() -> UsageActor {
     UsageActor {
         tenant: TenantId::parse("tenant-a").unwrap(),
         principal: PrincipalId::parse("https://idp.example.com#user-1").unwrap(),
         work_context: WorkContextId::parse("mission").unwrap(),
-    }
-}
-fn output(request: &RuntimeRequest) -> EmbeddingResult {
-    let mut vector = vec![0.; DIMENSIONS];
-    vector[0] = 1.;
-    EmbeddingResult {
-        request_id: request.request_id,
-        model: ModelIdentity {
-            id: MODEL_ID.into(),
-            revision: MODEL_REVISION.into(),
-        },
-        processing_id: PROCESSING_ID.into(),
-        dimensions: DIMENSIONS,
-        normalized: true,
-        execution: Execution {
-            device: Device::Mps,
-            dtype: "float32".into(),
-        },
-        runtime: RuntimeIdentity {
-            package: "veoveo-runtime-embedding".into(),
-            version: "0.1.0".into(),
-            source_revision: "synthetic-fixture-not-a-runtime-build".into(),
-            python: "3.14.6".into(),
-            sentence_transformers: "6.1.0".into(),
-            transformers: "5.20.2".into(),
-            torch: "2.14.1".into(),
-            torchvision: "0.29.1".into(),
-            pillow: "13.0.0".into(),
-        },
-        items: request
-            .items
-            .iter()
-            .enumerate()
-            .map(|(index, input)| Embedding {
-                index,
-                purpose: input.purpose(),
-                vector: vector.clone(),
-                token_count: 12,
-            })
-            .collect(),
-        usage: TokenUsage {
-            input_tokens: 12 * request.items.len() as u64,
-        },
     }
 }
 struct Synthetic {

@@ -57,7 +57,7 @@ fn server_config() -> ServerConfig {
     info.capabilities = capabilities;
     info.server_info = rmcp::model::Implementation::new("embedding", env!("CARGO_PKG_VERSION"));
     info.instructions = Some(
-        "Generate ordered 768-dimensional normalized embeddings with the fixed EmbeddingGemma 2 model. Read embedding://capabilities before use. Pass search_query, code_query or document items to embed. Text and vectors are not persisted. Limits reject overflow without truncation; caller retries are new computations.".to_owned(),
+        "Generate one normalized vector per ordered content item with the fixed full EmbeddingGemma 2 model. Combine ordered text/image/audio/video parts for a joint embedding; reference media by Artifact ID. Read embedding://capabilities for native controls, defaults and Veoveo service bounds. Dimensions default to768, with128/256/512 supported; optional request-wide promptName or prompt. Audio is not truncated unless explicitly requested. Content and vectors are transient; retries are new computation.".to_owned(),
     );
     info
 }

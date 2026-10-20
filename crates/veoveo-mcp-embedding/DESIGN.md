@@ -1,37 +1,174 @@
-# Embedding generation
+# Multimodal embedding generation
 
-Status: implementation candidate, not deployed qualification. Template source b39a6043eacd7f1c6eada93dd618fd8a6bc15026; dependency pins are the template's exact Core 433ed5f3 and SDK b3da412 revisions.
+This service owns typed MCP discovery, native caller-bound Artifact authorization and
+Core usage. The private runtime owns bounded media transfer/decoding and the full
+pinned GPU model. Historical purpose-based text-only deployment evidence does not
+qualify this replacement. No vector storage, search, Knowledge integration, custom
+sampler, clipping/chunking/aggregation, model choice or compatibility route is added.
 
-Hub calls this ordinary Rust SDK-hosted MCP service in native OpenShell Docker. It registers normally, receives a server database login and holds a native process Instance. The domain owns no text/vector tables. Its private runtime is native macOS MPS under launchd initially; Linux uses OpenShell Docker with CUDA/CDI after the authorized main merge. The runtime, not the Rust container, owns upstream Sentence Transformers/PyTorch and the fixed model snapshot.
+## Public ordered API
 
-## API and permissions
+`embed` requires `embedding.embeddings.create`; capabilities/docs require
+`embedding.models.read`. Ready SDK routes own discovery, authorization and dispatch.
+The contract-only feature contains no network, database or model runtime dependencies;
+media IDs reuse Artifact's contract type.
 
-The contract-only feature publishes `EmbedRequest`/`EmbeddingResult`, resources and permissions. `embed` requires `embedding.embeddings.create` (write, no billed risk); `embedding://capabilities` and docs require `embedding.models.read`. Ready SDK routes drive discovery, dispatch, resource policies and registration. No new Hub/Core/SDK permission layer exists.
+```json
+{
+  "items": [
+    {"content": [{"type": "text", "text": "hello again"}]},
+    {"content": [
+      {"type": "text", "text": "A product demonstration"},
+      {"type": "video", "artifactId": "<available-video-artifact-id>"}
+    ]}
+  ],
+  "dimensions": 256
+}
+```
 
-Each item is search_query `{text}`, code_query `{text}`, or document `{content,title?}`. Ordered mixed batches contain 1–8 items and at most 65,536 UTF-8 bytes including titles. The runtime rejects more than 8,192 actual tokens per rendered item or 16,384 per batch, including prefixes and special tokens. Requests are bounded at 512 KiB JSON; runtime response at 1 MiB. Empty/blank content and titles, unknown fields, user-selected models/dimensions/dtypes, token overflow, partial/reordered results, nonfinite or nonunit vectors and wrong identities are rejected. There is no truncation.
+For the two-item request above, the result contains two rows (the ellipses below
+are illustrative and are not valid JSON):
 
-The fixed model is google/embeddinggemma-2@914f7f89142e33e77833254d9c9b90c3cef7303b. Search prefix: `task: search result | query: `; code prefix: `task: code retrieval | query: `; document template: `title: {title_or_none} | text: {content}`. Native upstream pooling/projection/normalization remains authoritative. The semantic processing ID is SHA-256 of the runtime's sorted compact semantic descriptor; device, dtype, source/package versions are separate execution provenance. There is no vector database/search API.
+```text
+{
+  "dimensions": 256,
+  "items": [
+    {"index": 0, "vector": [0.12, -0.03, ...], "tokenCount": ..., "media": []},
+    {"index": 1, "vector": [0.08, 0.04, ...], "tokenCount": ..., "media": [...]}
+  ],
+  ...
+}
+```
 
-## Runtime boundary and lifecycle
+N ordered items produce N normalized vectors. All ordered parts of one item produce
+one joint vector. An item can contain repeated modalities. Code uses ordinary text.
+Dimensions default 768, with 128/256/512 supported through upstream Matryoshka truncation
+and normalization. Optional request-level `promptName` or literal `prompt` applies once
+to the complete item. They are exclusive; omission means no prefix. Names are
+SearchQuery, CodeRetrieval, Document, QuestionAnswering, FactChecking, Classification,
+Clustering and SentenceSimilarity. These choose native prefixes in the same model;
+they do not select different models or embedding spaces. Caller text/prompt cannot
+contain reserved media placeholders, which the upstream template interprets specially.
 
-The configured endpoint is one fixed private HTTP(S) origin; redirects and protocol retries are disabled. An opaque native OpenShell provider placeholder is sent as bearer authorization and resolved only by the admitted path/binary policy. Runtime credentials never enter the Hub response. The typed ReadCapabilities resource is a validated startup snapshot, including its runtime build identity; reading it does not refresh health or provenance. Runtime capabilities are checked at startup; /readyz rechecks authenticated capabilities/health within three seconds. Neither readiness nor an embedding request downloads a model. The model is prefetched by the operator into a trusted native Hugging Face cache and loaded read-only by exact revision.
+Closed `preprocessing` fields mirror audited native operations:
 
-The native HTTP client retires idle pooled connections after four seconds, before the owned runtime's five-second keep-alive expiry. Before this change, controlled Mac probes observed a first delayed POST failing at the send stage without an HTTP status. Native Hub acceptance with the changed lifetime passed after 32.821 seconds of initial idle, after MCP stop/start and after a launchd runtime restart. These deployed results support the timeout fix; the stale upstream connection explanation remains a source-supported inference without a captured packet trace. The separate synthetic intermediary regression verifies a fresh connection for a delayed POST and one observed submission; it does not establish native transport or GPU inference. This change adds no automatic replay or OpenShell patch. Linux qualification remains a separate gate.
+| Group | Fields and defaults |
+|---|---|
+| image | maxSoftTokens 280; choices 70/140/280/560/1120 |
+| audio | truncation false; maxLength samples only if true (native default 480000) |
+| video | fps 1, maxFrames 32, overflowStrategy uniform (or truncate), maxSoftTokens 140, addTimestamps false, loadAudioFromVideo false |
 
-One GPU batch is admitted at a time. Busy requests fail before execution instead of queuing. The tool has a 60-second deadline; GPU kernels may continue after timeout/disconnect. The runtime retains the GPU slot until its real worker finishes. A caller retry starts a new computation; there is no automatic mutation replay or durable Task claim. Restart drops in-memory requests/results; Core usage/process identity persists through native APIs.
+Audio uses native 16 kHz decoding/resampling without silent 30-second truncation. Native video
+soundtrack inclusion is refused alongside separate audio parts because of the pinned
+processor interaction. Missing requested soundtrack fails explicitly. These are upstream
+CPU preprocessing operations, distinct from FP32 MPS/CUDA inference. No GPU decoding
+claim is made. Sampling/truncation coverage is returned; application clip extraction,
+long-media chunking or aggregation would be separate proposed pre/postprocessing.
 
-## Usage and failures
+Initial Veoveo service bounds are 8 items, 16 parts/item, 32 parts/batch, 64 KiB total UTF-8
+text/prompt, 64 MiB/source and 128 MiB aggregate transfer; 16 MP/image or frame and 64 MP
+aggregate selected pixels; 300 seconds/source and 600 seconds aggregate decoded audio; video fps ≤ 120
+and maxFrames ≤ 256. These defensive limits require deployed capacity qualification,
+and are not Google capability or semantic-quality guarantees. Actual native tokens
+must fit 8192/item and 16384/batch; all preflight precedes the first model forward.
 
-The closed `embedding.input_tokens` kind is nonmonetary, FOCUS AI and Machine Learning / Tokens. Core's public UsageStore/UsageWrite APIs support synchronous task=None records; the SDK's current Task-only facade is not a reason to create Tasks. No foreign-schema SQL exists in this component.
+## Artifact and private runtime boundary
 
-Before dispatch, reserve min(item_count × 8192, 16384) tokens. This is a conservative estimate, never measured usage. A successful validated runtime response supplies actual prefix/special-inclusive tokens. The source ID is a fresh server UUIDv7 bound to the verified Hub caller tenant/principal/work context. A typed, explicitly not_started rejection from the configured runtime produces zero actual tokens; arbitrary HTTP errors, disconnects, timeout and invalid output remain ambiguous and retain the estimate. A successful inference followed by accounting failure returns an explicit inference-completed/accounting-failed error, never a false successful tool result or a hidden replay. If the overall deadline interrupts accounting, the error explicitly says execution/accounting may be incomplete. Text and vectors are never part of ledger records or application logs.
+The service declares Artifact read use. Native ServerCalls are configured from the
+same registration key/metadata/HTTP client; handlers use `ctx.client()` and typed
+CreateDownloadRequest through the Hub. Artifact owns ACL and immutable availability.
+MCP requires the exact requested ID, Available state, known positive bounded size and
+SHA256, the matching MIME family (audio also accepts video containers), and a live GET.
+It checks aggregate sizes before any runtime dispatch. No bulk bytes pass through MCP.
 
-## Validation
+The private server-only DTO replaces Artifact references with their authorized
+identity/mediaType/size/digest plus Artifact's actual typed SignedTransfer. Empty
+headers may be omitted. URLs/headers never enter public schemas, results, errors,
+Debug output or logs. Private serialized payload also must fit 512 KiB; public text
+bounds alone do not constrain signed-header expansion. Runtime independently enforces
+its configured storage origin, no redirects/proxies, elapsed deadline, raw byte/size/hash
+and native decoded bounds. Verified temporary files remain owned by its actual worker.
+Metadata validation and repeated bounded native decodes are explicit runtime costs.
 
-Contract and synthetic-provider tests cover admission, exact identity/order/finite/norm/token boundaries, permissions, pre-execution rejection, ambiguous failures and accounting failures without replay. Native PostgreSQL fixture tests prove non-Task Core accounting under a server login. Docker check is deterministic and does not perform inference. Real pinned-model MPS qualification, authenticated deployed Hub/runtime calls, then later Linux CUDA/CDI are separate measured gates.
+All references resolve before inference usage reservation. Text-only requests require
+no Artifact call. One 60-second deadline covers resolution and generation; failed/denied or
+timed-out resolution reports not_started with no inference usage reservation. Once
+generation begins, timeout conservatively reports execution/accounting may be incomplete.
+One runtime GPU slot remains owned until actual work finishes, even after disconnect;
+there is no retry, queue, kernel-cancellation guarantee or durable embedding Task.
 
-The separately ignored `native_hub_real_embedding_capacity_and_usage` acceptance test uses the same installed Hub/member fixture as the six-item test, with a fresh `VEOVEO_ACCEPTANCE_REPORT`. It makes two serial real calls: two 8,192-token documents, then one 8,192-token document plus seven 15-token documents. Compact public input recipes reproduce the earlier runtime ceiling fixtures, without reusing their request IDs. Each case validates the complete ordered output and fixed model/processing/device/runtime identity, then requires exactly one estimate and one actual usage record with the expected token delta. Pause other embedding activity for that principal. Select this test explicitly with `cargo test --locked -p veoveo-mcp-embedding --test acceptance native_hub_real_embedding_capacity_and_usage -- --ignored --exact --nocapture --test-threads=1`; ordinary checks do not run it. Busy/disconnect behavior remains separate Mac/common-code evidence, and own daily usage does not expose request-level context or delegation attribution.
+The fixed runtime endpoint accepts a private bearer resolved through admitted native
+OpenShell policy. Redirects/retries are disabled; idle connections retire after 4 seconds,
+before the runtime's 5-second keepalive. Capability identity is validated at startup; the
+public capability resource is that snapshot, not a fresh-health claim. /readyz rechecks
+within 3 seconds. No request downloads a model. Installation owns policies/cache/prefetch.
 
-Delegated calls preserve the verified Hub acting server and task through native Core UsageVia, while the embedding operation itself has no Task. Core's native TaskId parser accepts UUID task identities; an opaque task that it cannot represent is explicitly rejected before usage reservation or runtime dispatch. No attribution is silently dropped or mapped to a new identifier.
+## Output validation and provenance
 
-Private-runtime rejections expose only a closed safe code (including item_token_limit, batch_token_limit, busy, unauthorized and not_ready), with matching status and explicit not_started provenance. Input rejections are MCP invalid-parameter errors. Unknown codes, mismatched status/request IDs and arbitrary failure bodies remain ambiguous execution; their text is never exposed.
+Every result must match fresh UUIDv7 request ID, ordered indices, item/media cardinality,
+requested dimensions, finite unit vectors, actual per-item/aggregate token bounds and
+nonmonetary usage totals. Model/checkpoint, FP32 device and all pinned package versions
+are checked, including exact MPS vs CUDA wheel suffixes and TorchCodec. FFmpeg versions
+must be structurally valid native provenance. Runtime source revision is a commit ID.
+
+ProcessingId hashes RFC8785/JCS bytes of the effective model/dimensions/prompt/native
+processing/layout/pooling/audio-rate descriptor. Rust uses exact
+serde_json_canonicalizer 0.3.2, already shared by Core; Python uses rfc8785==0.1.4. This
+shared pin is deliberate (upstream also has 0.4.1). Frozen Python-generated Unicode and
+numeric cases prove canonical byte/hash parity; ordinary sorted JSON is insufficient.
+Input content is excluded except explicit effective prompt; custom prompt is not echoed,
+only its digest and optional canonical name.
+
+Closed image/audio/video coverage must correspond to each exact ordered media part and
+authorized safe source identity. Pixel/duration/frame/sample bounds, native option effects,
+truncation/retained samples and soundtrack presence are checked. Native repeated frame
+indices are valid: order is nondecreasing, not unique. Model prompt timestamps equal
+index/sourceFPS; actual codec PTS are separate and can have source timeline offsets.
+Validation does not reimplement Google's sampler or independently infer semantics from
+pixels. Typed public result validation can use safe source identities for saved receipts,
+without constructing fake grants or retaining signed URLs.
+
+## Accounting and native composition
+
+Core UsageStore/UsageWrite support synchronous task=None usage. Reserve
+min(N × 8192, 16384) as an estimate before runtime dispatch, never as measured tokens.
+Validated success supplies actual tokens. A closed correctly status/request-bound
+not_started runtime rejection records zero actual. Unknown bodies/codes, disconnect,
+timeout or malformed output retain estimate as ambiguous. Accounting failure after
+successful inference explicitly says inference completed; never replay it.
+
+Caller tenant/principal/Work Context come from verified Hub identity. Core's one
+UsageVia names the immediate acting server and its immediate Task, if any; opaque Tasks
+Core cannot represent reject before reservation. Earlier originating Task constraints
+remain in the signed SDK/Hub chain and are not relabeled under the immediate actor.
+Full actor history is Hub/SDK provenance, beyond Core's single-via usage record.
+
+## Qualification boundaries
+
+Component tests use explicitly synthetic vectors/media metadata and a simulated
+Artifact grant/denial handler. Native SDK Mesh tests prove direct/composed delegation,
+permission checks, ordered resolution and no runtime/usage on refusal; they do not
+prove actual Artifact SQL ACL or real inference. Artifact's own tests and deployed
+real Artifact probes supply that separate evidence. No content is persisted here.
+
+The ignored acceptance runner consumes a new external corpus/capacity manifest with
+public inputs, exact Artifact bytes/hash/recipes, optional expected tokens and explicit
+ranking expectations. It reserves a new report, validates offline input/baseline before
+live entry, reads safe Artifact resources (no signed transfers), makes serial native
+embedding calls, validates whole outputs and exact own-usage deltas, and records timings,
+request IDs, output identities and compact structured-result byte hashes. Own daily
+usage does not establish full request/delegation attribution. Cross-device parity
+requires matching processing and source bytes, even if Artifact IDs differ. Real-media
+repeated-modality cases, deployed composed calls and quality rankings remain explicit
+coordinator scenarios, never inferred from synthetic tests. An external retained Python
+wire fixture can exercise the Rust producer/consumer boundary without another model call.
+
+
+Media coverage deserialization preserves native JSON decimal values through a closed
+RawValue payload followed by typed coverage decoding. This avoids serde's internally
+tagged buffering interaction with the shared arbitrary_precision feature; neither
+alternate wire forms nor handwritten number conversion are accepted. Tests cover raw
+JSON and the SDK's structuredContent Value path, including actual retained Python output.
+See [acceptance inputs](tests/ACCEPTANCE.md) for the opt-in manifest and temporary native
+caller lifecycle. Deployed ACL denial is exercised only with an externally confirmed
+existing object outside the caller's actual ACL; otherwise it is explicitly not exercised.

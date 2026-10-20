@@ -21,6 +21,8 @@ contract = [
     "dep:uuid",
     "dep:veoveo-hub-sdk",
     "dep:veoveo-types",
+    "dep:veoveo-mcp-artifact",
+    "dep:serde_json",
 ]
 # The hosted server: MCP through the SDK, native Core usage and the binary.
 server = [
@@ -44,6 +46,8 @@ server = [
     "dep:veoveo-store",
     "dep:veoveo-usage",
     "dep:chrono",
+    "dep:sha2",
+    "dep:serde_json_canonicalizer",
     "reqwest/json",
     "reqwest/stream",
 ]
@@ -55,6 +59,7 @@ thiserror = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true }
 veoveo-hub-sdk = { workspace = true, features = ["contract"], optional = true }
 veoveo-types = { workspace = true, optional = true }
+veoveo-mcp-artifact = { workspace = true, features = ["contract"], optional = true }
 
 anyhow = { workspace = true, optional = true }
 clap = { workspace = true, optional = true }
@@ -63,7 +68,7 @@ reqwest = { workspace = true, features = ["rustls-no-provider"], optional = true
 rmcp = { workspace = true, features = ["server", "macros", "schemars", "transport-streamable-http-server"], optional = true }
 rustls = { workspace = true, optional = true }
 secrecy = { workspace = true, optional = true }
-serde_json = { workspace = true, optional = true }
+serde_json = { workspace = true, features = ["raw_value"], optional = true }
 sqlx = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true, features = ["sync", "time", "net"] }
 tracing = { workspace = true, optional = true }
@@ -71,9 +76,12 @@ url = { workspace = true, optional = true }
 veoveo-store = { workspace = true, optional = true }
 veoveo-usage = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+serde_json_canonicalizer = { workspace = true, optional = true }
 
 [dev-dependencies]
-sha2 = "=0.11.0"
+sha2.workspace = true
+veoveo-hub-sdk-fixture.workspace = true
 veoveo-hub-sdk = { workspace = true, features = ["server", "testing"] }
 # `database-conformance` holds the crate's queries and schema to core's database rules.
 veoveo-fixtures = { workspace = true, features = ["store", "database-conformance"] }
@@ -102,4 +110,12 @@ required-features = ["server"]
 
 [[test]]
 name = "acceptance"
+required-features = ["server"]
+
+[[test]]
+name = "validation"
+required-features = ["server"]
+
+[[test]]
+name = "composition"
 required-features = ["server"]

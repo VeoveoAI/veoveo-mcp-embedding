@@ -10,11 +10,13 @@ use veoveo_hub_sdk::{
     hosting::{DomainServer, ReadCache, ResourceBuilder, RoutePolicy, Routes, hub_identity},
     server_contract::McpServerSetup,
 };
+use veoveo_mcp_artifact::contract::ArtifactPermission;
 use veoveo_usage::UsageActor;
 
 use crate::{
     contract::*,
     provider::RuntimeClient,
+    resolution::resolve,
     usage::{CoreMeter, GenerationError, generate, usage_via},
 };
 
@@ -56,13 +58,30 @@ impl EmbeddingMcp {
             principal: identity.actor.id,
             work_context: identity.authority.work_context,
         };
-        let request = RuntimeRequest {
-            request_id: uuid::Uuid::now_v7(),
-            items: request.items,
+        let id = uuid::Uuid::now_v7();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(REQUEST_SECONDS);
+        // Artifact owns authorization/availability. Resolve all references before
+        // reserving inference usage or contacting the private runtime.
+        let request = match tokio::time::timeout_at(deadline, resolve(id, &request, &context)).await
+        {
+            Ok(Ok(request)) => request,
+            Ok(Err(error)) => {
+                return Err(ErrorData::internal_error(
+                    format!("embedding request {id}: {error}"),
+                    Some(serde_json::json!({"execution":"not_started","requestId":id})),
+                ));
+            }
+            Err(_) => {
+                return Err(ErrorData::internal_error(
+                    format!(
+                        "embedding request {id}: artifact resolution deadline exceeded; inference not started; no inference usage reserved"
+                    ),
+                    Some(serde_json::json!({"execution":"not_started","requestId":id})),
+                ));
+            }
         };
-        let id = request.request_id;
-        let result = tokio::time::timeout(
-            Duration::from_secs(REQUEST_SECONDS),
+        let result = tokio::time::timeout_at(
+            deadline,
             generate(&self.runtime, &self.meter, &request, actor, via),
         )
         .await;
@@ -94,8 +113,9 @@ static ROUTES: LazyLock<Routes<EmbeddingMcp>> = LazyLock::new(|| {
     let read = RoutePolicy::permission(EmbeddingPermission::ModelsRead)
         .expect("embedding read permission");
     Routes::<EmbeddingMcp>::builder(read.clone())
+        .uses(ArtifactPermission::ArtifactsRead.name())
         .tool::<EmbedRequest, _, _>(
-            "Generate a bounded, ordered batch of normalized 768-dimensional text/code embeddings. Select each item's search_query, code_query or document purpose. Overflow is rejected, never truncated. No content is persisted; a retry starts new computation.",
+            "Generate one normalized embedding for each ordered item. Each item's ordered text/image/audio/video parts produce one joint vector; media uses Artifact IDs. Optional dimensions (128/256/512/768), one request-wide prompt, and closed native preprocessing controls. Actual shared token/resource overflow rejects before inference. Audio truncation is off by default; explicit truncation and video sampling are reported. No content is persisted; retries start new computation.",
             RoutePolicy::permission(EmbeddingPermission::EmbeddingsCreate).expect("embedding create permission"),
             |domain, request, context| async move { domain.embed(request, context).await.map_err(Into::into) },
         )

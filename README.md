@@ -2,7 +2,9 @@
 
 Standalone bounded embedding generation through Veoveo Hub and an authenticated private GPU runtime. This Rust service owns native registration, permissions and Core usage; the private runtime owns GPU inference. Read [DESIGN](crates/veoveo-mcp-embedding/DESIGN.md) for the component contract and the [architecture](https://github.com/VeoveoAI/veoveo-docs/blob/main/LORE_OPENSHELL_INTEGRATION.md#embedding-generation) for platform responsibilities.
 
-Mac MPS and Linux CUDA deployment qualification passed through the Hub, including real inference, token accounting, capacity, access denial and restart persistence. The [execution plan](https://github.com/VeoveoAI/veoveo-docs/blob/main/OPENSHELL_HARDCUT_PLAN.md#embedding-generation--2026-10-19) records source identities, measurements and proof limits. Synthetic component tests are reported separately.
+The multimodal replacement accepts ordered batches of ordered text/image/audio/video parts, with one normalized vector per item. Media references are native Artifact IDs. The MCP authorizes them through typed Artifact calls; the private runtime verifies and decodes the media. Optional dimensions, prompt and closed native preprocessing controls are documented in [DESIGN](crates/veoveo-mcp-embedding/DESIGN.md).
+
+Previous text-only deployment qualification does not qualify this replacement. Component tests, real runtime inference and deployed Hub acceptance are separate gates; the [execution plan](https://github.com/VeoveoAI/veoveo-docs/blob/main/OPENSHELL_HARDCUT_PLAN.md) records their current evidence and limitations. Synthetic test vectors never prove inference or media validity.
 
 ## Check
 
@@ -36,3 +38,5 @@ docker build --target runtime -t veoveo-mcp-embedding:0.1.0   --build-arg VERSIO
 ```
 
 Mac qualification precedes main merge/push and Linux deployment, as explicitly authorized. Linux acceptance remains separate. No pgvector, vector persistence, Knowledge adaptation or priced provider billing is included.
+
+The ignored native acceptance scenarios and their closed external manifests are documented in [ACCEPTANCE](crates/veoveo-mcp-embedding/tests/ACCEPTANCE.md). They do not run in ordinary checks.

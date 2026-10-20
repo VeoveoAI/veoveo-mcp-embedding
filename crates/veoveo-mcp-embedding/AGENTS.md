@@ -2,10 +2,12 @@
 
 Read DESIGN.md. Slug/schema/scheme `embedding`, MCP `/embedding/mcp`, private port 8803.
 
-- `embed` is a bounded synchronous typed tool. Fixed EmbeddingGemma 2 revision and processing identity; 768 dimensions, normalized FP32 GPU execution. No Tasks or persisted products.
-- Purposes are search_query, code_query and document. Runtime applies exact upstream prompts and validates actual untruncated tokenizer lengths.
-- Validate complete runtime identity, bytes, dimensions, order, finite norms and token accounting before exposing output. Reject partial batches.
-- Content is transient. Only native Core process/usage metadata persists. The domain schema is empty; no SQL statements or content tables.
-- Native forwarded identity supplies usage tenant/principal/context. Record a conservative estimate before dispatch; confirmed rejection records zero actual; ambiguous execution retains estimate. Accounting failure after inference must explicitly say inference completed, without replaying it.
-- Preserve fail-closed permissions and private provider custody. No priced-provider charge means no billed-risk or invented price.
-- Tests use synthetic vectors to exercise boundaries; they never prove actual model inference. Real MPS/CUDA results belong in separate qualification receipts.
+- `embed` is a bounded synchronous typed tool: ordered items of ordered text/image/audio/video parts; one joint vector per item. Fixed full EmbeddingGemma 2 revision, optional request-wide prompt and 128/256/512/768 dimensions. Normalized FP32 MPS/CUDA inference, native batch_size=1. No Tasks or persisted products.
+- Media parts use native ArtifactId only. Declare Artifact read use and call typed CreateDownload through ctx.client()/native ServerCalls. Artifact owns ACL/availability; MCP never fetches media bytes. Runtime alone consumes private grants and verifies ephemeral bytes. Never expose or Debug/log signed transfers.
+- Closed native preprocessing controls mirror the pinned runtime; audio defaults truncation false. Custom clips/chunking/aggregation are excluded. Limits are Veoveo admission bounds, not Google capabilities/quality claims.
+- Validate public bounds, all authorized Artifact metadata, aggregate transfer bytes and actual private JSON 512 KiB before usage reservation/dispatch. One 60-second deadline covers resolution and generation. Text-only requests call no Artifact tool.
+- Independently validate complete runtime/package/device identity, RFC8785/JCS effective processing hash, ordered cardinality/dimensions/norm/tokens and typed media coverage/source identities. Repeated native video indices are allowed; actualPTS and model index/FPS timestamps differ. Reject partial output.
+- Content is transient. Only native Core process/usage metadata persists. Domain schema is empty: no SQL or content tables. Reserve a conservative estimate before inference; confirmed rejection records zero actual; ambiguous execution retains estimate. Accounting failure after inference explicitly says inference completed, with no replay.
+- Native UsageVia records the immediate actor/task only. Prior originating Task constraints remain in signed Hub delegation context; do not relabel them under the immediate actor or change Core schema.
+- Preserve fail-closed permissions, private provider custody, and contract-only dependency isolation. No priced provider charge means no billed risk or invented price.
+- Synthetic vectors/metadata/Artifact denial fixtures prove component boundaries, never inference, encoded media validity or real Artifact ACL. Real MPS/CUDA, native Artifact ACL and deployed acceptance belong to separate receipts. Builder owns full checks/deployment; no provider calls during iteration.

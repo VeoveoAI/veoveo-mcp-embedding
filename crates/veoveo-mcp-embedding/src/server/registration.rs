@@ -1,9 +1,11 @@
 //! Registration with the Hub: the server's key, its declarations, and the client that
 //! removes the registration when the server stops.
 use anyhow::{Context, Result};
+use veoveo_hub_sdk::hosting::ServerCalls;
 use veoveo_hub_sdk::registration::{
     ClientMetadata, RegistrationDeclaration,
     client::{KeyDirectory, Registration, RegistrationClient},
+    statement::ServerKeyPair,
 };
 
 use super::config::Args;
@@ -15,11 +17,18 @@ use crate::mcp::AUTHORIZATION;
 pub(super) async fn register(
     args: &Args,
     declaration: RegistrationDeclaration,
-) -> Result<(RegistrationClient, Registration, reqwest::Client)> {
+) -> Result<(
+    RegistrationClient,
+    Registration,
+    reqwest::Client,
+    ServerCalls,
+)> {
     let key = KeyDirectory::new(&args.key_directory)
         .load_or_generate()
         .context("loading the registration key")?;
     let metadata = ClientMetadata::new(*key.public_key(), declaration, AUTHORIZATION.clone())?;
+    let call_key = ServerKeyPair::from_pkcs8_der(key.pkcs8_der())
+        .context("retaining the same native registration key for server calls")?;
     let http = reqwest::Client::builder()
         .build()
         .context("building the registration HTTP client")?;
@@ -31,12 +40,15 @@ pub(super) async fn register(
         endpoint,
         args.registration_secret.clone(),
         key,
-        metadata,
+        metadata.clone(),
     )?;
     let registration = client
         .register()
         .await
         .context("registering with the Hub")?;
     tracing::info!(client_id = %registration.client_id(), "registered with the Hub");
-    Ok((client, registration, http))
+    let calls = ServerCalls::discover(&registration, &metadata, &call_key, http.clone())
+        .await
+        .context("discovering the Hub's token endpoint")?;
+    Ok((client, registration, http, calls))
 }

@@ -1,5 +1,6 @@
 //! Synthetic boundary: native SDK discovery/permissions; no model inference.
 #![cfg(feature = "server")]
+mod support;
 use veoveo_hub_sdk::hosting::{
     Hosted,
     testing::{self, TestHub},
@@ -18,13 +19,7 @@ async fn native_discovery_does_not_grant_embedding_compute_from_read_permission(
         Device::Mps,
     )
     .unwrap();
-    let capabilities: Capabilities = serde_json::from_value(serde_json::json!({
-        "model":{"id":MODEL_ID,"revision":MODEL_REVISION},"processingId":PROCESSING_ID,
-        "dimensions":768,"normalized":true,"execution":{"device":"mps","dtype":"float32"},
-        "runtime":{"package":"veoveo-runtime-embedding","version":"0.1.0","sourceRevision":"synthetic","python":"3.14.6","sentenceTransformers":"6.1.0","transformers":"5.20.2","torch":"2.14.1","torchvision":"0.29.1","pillow":"13.0.0"},
-        "purposes":["search_query","code_query","document"],
-        "limits":{"maxItems":8,"maxContentBytes":65536,"maxItemTokens":8192,"maxBatchTokens":16384}
-    })).unwrap();
+    let capabilities = support::capabilities();
     let domain = EmbeddingMcp::new(runtime, CoreMeter::new(store).await.unwrap(), capabilities);
     let compute_domain = domain.clone();
     let hub = TestHub::new(
@@ -35,7 +30,7 @@ async fn native_discovery_does_not_grant_embedding_compute_from_read_permission(
     .granting([EmbeddingPermission::ModelsRead.name()]);
     let tools = hub.rpc("tools/list", serde_json::json!({})).await;
     assert_eq!(tools["result"]["tools"], serde_json::json!([]));
-    let denied = hub.rpc("tools/call", serde_json::json!({"name":"embed","arguments":{"items":[{"purpose":"search_query","text":"synthetic"}]}})).await;
+    let denied = hub.rpc("tools/call", serde_json::json!({"name":"embed","arguments":{"items":[{"content":[{"type":"text","text":"synthetic"}]}]}})).await;
     assert!(denied["error"].is_object() || denied["result"]["isError"] == true);
     assert!(denied.to_string().contains("embedding.embeddings.create"));
     let caps = hub
