@@ -167,7 +167,6 @@ pub struct MediaSource {
     pub artifact_id: ArtifactId,
     pub media_type: MediaType,
     pub size: ObjectSize,
-    pub sha256: Sha256Digest,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -324,7 +323,7 @@ rejection_codes! {
     IncompatibleAudioOptions=>"incompatible_audio_options", ContentLimit=>"content_limit", ItemTokenLimit=>"item_token_limit", BatchTokenLimit=>"batch_token_limit",
     RequestSize=>"request_size", InvalidJson=>"invalid_json", Busy=>"busy", Unauthorized=>"unauthorized", NotReady=>"not_ready",
     SourceOrigin=>"source_origin", SourceExpired=>"source_expired", SourceTimeout=>"source_timeout", SourceRedirect=>"source_redirect", SourceRefused=>"source_refused",
-    SourceEncoding=>"source_encoding", SourceSize=>"source_size", SourceDigest=>"source_digest", SourceUnavailable=>"source_unavailable",
+    SourceEncoding=>"source_encoding", SourceSize=>"source_size", SourceUnavailable=>"source_unavailable",
     MediaDuration=>"media_duration", MediaPixels=>"media_pixels", MediaMetadata=>"media_metadata", MissingAudioStream=>"missing_audio_stream", InvalidMedia=>"invalid_media",
     PreprocessingCardinality=>"preprocessing_cardinality", PreprocessingCoverage=>"preprocessing_coverage", PreprocessingFailed=>"preprocessing_failed",
 }

@@ -89,8 +89,8 @@ static ARTIFACT_ROUTES: LazyLock<Routes<ArtifactFixture>> = LazyLock::new(|| {
                             ArtifactId::parse(uuid::Uuid::now_v7().to_string()).unwrap()
                     }
                     3 => answer.artifact.size = None,
-                    4 => answer.artifact.sha256 = None,
-                    5 => answer.artifact.state = artifact::ArtifactState::Verifying,
+                    4 => answer.artifact.state = artifact::ArtifactState::Failed,
+                    5 => answer.artifact.state = artifact::ArtifactState::Uploading,
                     6 => {
                         answer.artifact.media_type =
                             artifact::MediaType::parse("application/octet-stream").unwrap()
@@ -135,7 +135,6 @@ fn download(id: ArtifactId) -> CreateDownloadResult {
             name: artifact::ArtifactName::parse("synthetic.png").unwrap(),
             media_type: artifact::MediaType::parse("image/png").unwrap(),
             size: Some(artifact::ObjectSize::new(3).unwrap()),
-            sha256: Some(veoveo_types::Sha256Digest::from_bytes([0; 32])),
             owner: principal.id.clone(),
             work_context: testing::authority().work_context,
             labels: Default::default(),
@@ -264,7 +263,7 @@ async fn typed_artifact_resolution_is_caller_bound_direct_and_composed_before_in
         let refusal=denied.call("embedding","embed",request.clone()).await;
         assert!(refusal["error"].is_object()||refusal["result"]["isError"]==true);
         assert!(artifact.seen.lock().unwrap().is_empty());assert!(runtime_seen.lock().unwrap().is_empty());
-        // Bad ACL/availability/integrity metadata never enters the GPU runtime or ledger.
+        // Bad ACL/availability/type/size metadata never enters the GPU runtime or ledger.
         for mode in (1..=10).chain([12]) {artifact.mode.store(mode,Ordering::SeqCst);let answer=mesh.call("embedding","embed",request.clone()).await;
             assert!(answer["error"].is_object()||answer["result"]["isError"]==true,"mode{mode}");assert!(!answer.to_string().contains("synthetic-private-ACL-reason"));
             assert!(runtime_seen.lock().unwrap().is_empty());}

@@ -4,7 +4,7 @@
 //! fixture recipes/identities, optional token expectations and bounded ranking checks.
 //! REPORT must be new; its parent and any baseline must already exist. Reserve and
 //! validate every offline input/baseline before any Hub request. Signed transfers are
-//! never requested by this runner: safe Artifact resources authorize source identities.
+//! requested only by the test caller for bounded independent fixture fingerprints.
 //! Each test makes only its manifest's serial embed calls, with no automatic retry.
 //! Credentials, arbitrary private errors and signed storage URLs never enter receipts.
 #![cfg(feature = "server")]
@@ -25,7 +25,9 @@ use veoveo_hub_sdk::{
     client::{CallError, CatalogError, HubClient, StaticBearer},
     identity::HubProfileId,
 };
-use veoveo_mcp_artifact::contract::{ArtifactState, ReadArtifact};
+use veoveo_mcp_artifact::contract::{
+    ArtifactState, CreateDownloadRequest, ReadArtifact, SignedTransfer, TransferMethod,
+};
 use veoveo_mcp_embedding::{
     contract::*,
     provider::{validate_capabilities, validate_public_result},
@@ -568,6 +570,16 @@ fn baseline(path: Option<&Path>, manifest: &Manifest) -> Result<Option<Vec<Recei
             same_input(&receipt.input, &case.input),
             "baseline semantic input differs"
         );
+        let prior_recipes: Vec<FixtureRecipe> = serde_json::from_value(
+            report["fixtureRecipes"]
+                .as_array()
+                .context("baseline fixture recipes missing")?
+                .iter()
+                .find(|entry| entry["case"] == case.name)
+                .context("baseline case recipes missing")?["fixtures"]
+                .clone(),
+        )
+        .context("baseline fixture recipes are invalid")?;
         for (item_index, item) in case.input.items.iter().enumerate() {
             for (part_index, part) in item.content.iter().enumerate() {
                 if let Some(id) = part.artifact_id() {
@@ -581,11 +593,17 @@ fn baseline(path: Option<&Path>, manifest: &Manifest) -> Result<Option<Vec<Recei
                         .find(|row| row.part_index == part_index)
                         .context("baseline source position missing")?
                         .source;
+                    let prior = prior_recipes
+                        .iter()
+                        .find(|recipe| recipe.artifact_id == source.artifact_id)
+                        .context("baseline source recipe missing")?;
                     ensure!(
                         source.media_type == recipe.media_type
                             && source.size == recipe.size
-                            && source.sha256 == recipe.sha256,
-                        "baseline media bytes differ from offline recipe"
+                            && prior.media_type == recipe.media_type
+                            && prior.size == recipe.size
+                            && prior.sha256 == recipe.sha256,
+                        "baseline media fixture evidence differs from offline recipe"
                     );
                 }
             }
@@ -650,18 +668,90 @@ fn record(report: &mut Value, method: &str, started: Instant, detail: Value) {
     let steps = report["sequence"].as_array_mut().unwrap();
     steps.push(json!({"sequence":steps.len()+1,"method":method,"elapsedMs":elapsed(started),"detail":detail}));
 }
-async fn authorized_sources(client: &HubClient, case: &Case) -> Result<Vec<Vec<SourceEvidence>>> {
+// Test-caller evidence only: production Embedding MCP never fetches source bytes.
+async fn verify_fixture_download(
+    http: &reqwest::Client,
+    transfer: &SignedTransfer,
+    recipe: &FixtureRecipe,
+) -> Result<()> {
+    ensure!(
+        recipe.size.bytes() > 0 && recipe.size.bytes() <= MAX_ARTIFACT_BYTES,
+        "fixture size exceeds byte bound"
+    );
+    ensure!(
+        transfer.method == TransferMethod::Get && transfer.expires_at > chrono::Utc::now(),
+        "fixture transfer is not a live GET"
+    );
+    let mut request = http.get(transfer.url.as_str());
+    for (name, value) in &transfer.headers {
+        request = request.header(name.as_str(), value.as_str());
+    }
+    let mut response = request
+        .send()
+        .await
+        .map_err(|_| anyhow!("fixture GET failed"))?;
+    ensure!(
+        response.status() == reqwest::StatusCode::OK,
+        "fixture GET returned non-success status"
+    );
+    ensure!(
+        response
+            .headers()
+            .get("content-encoding")
+            .is_none_or(|value| value == "identity"),
+        "fixture GET returned encoded bytes"
+    );
+    ensure!(
+        response
+            .content_length()
+            .is_none_or(|length| length == recipe.size.bytes()),
+        "fixture GET length differs from recipe"
+    );
+    let mut length = 0_u64;
+    let mut fingerprint = Sha256::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| anyhow!("fixture GET body failed"))?
+    {
+        length = length
+            .checked_add(chunk.len() as u64)
+            .context("fixture GET size overflow")?;
+        ensure!(
+            length <= recipe.size.bytes(),
+            "fixture GET exceeds byte bound"
+        );
+        fingerprint.update(&chunk);
+    }
+    ensure!(
+        length == recipe.size.bytes(),
+        "fixture GET size differs from recipe"
+    );
+    ensure!(
+        veoveo_types::Sha256Digest::from_bytes(fingerprint.finalize().into()) == recipe.sha256,
+        "fixture GET fingerprint differs from independent recipe"
+    );
+    Ok(())
+}
+
+async fn authorized_sources(
+    client: &HubClient,
+    http: &reqwest::Client,
+    case: &Case,
+) -> Result<Vec<Vec<SourceEvidence>>> {
     let mut result = vec![];
     for item in &case.input.items {
         let mut rows = vec![];
         for (part_index, part) in item.content.iter().enumerate() {
             if let Some(id) = part.artifact_id() {
-                let artifact = client
-                    .read(ReadArtifact { artifact: id })
+                let download = client
+                    .call(CreateDownloadRequest { artifact_id: id })
                     .timeout(DEADLINE)
                     .await
-                    .map_err(|_| anyhow!("typed Artifact metadata read failed before embedding"))?;
-                let artifact = artifact.artifact;
+                    .map_err(|_| {
+                        anyhow!("typed Artifact download grant failed before embedding")
+                    })?;
+                let artifact = download.artifact;
                 ensure!(
                     artifact.artifact_id == id && artifact.state == ArtifactState::Available,
                     "Artifact identity/state differs"
@@ -670,7 +760,6 @@ async fn authorized_sources(client: &HubClient, case: &Case) -> Result<Vec<Vec<S
                     artifact_id: id,
                     media_type: artifact.media_type,
                     size: artifact.size.context("Artifact size unavailable")?,
-                    sha256: artifact.sha256.context("Artifact SHA256 unavailable")?,
                 };
                 let recipe = case
                     .fixtures
@@ -678,11 +767,10 @@ async fn authorized_sources(client: &HubClient, case: &Case) -> Result<Vec<Vec<S
                     .find(|fixture| fixture.artifact_id == id)
                     .context("fixture recipe missing")?;
                 ensure!(
-                    source.media_type == recipe.media_type
-                        && source.size == recipe.size
-                        && source.sha256 == recipe.sha256,
-                    "Artifact bytes identity differs from fixture recipe"
+                    source.media_type == recipe.media_type && source.size == recipe.size,
+                    "Artifact type/size differs from fixture recipe"
                 );
+                verify_fixture_download(http, &download.get, recipe).await?;
                 rows.push(SourceEvidence { part_index, source });
             }
         }
@@ -717,8 +805,8 @@ fn parity(previous: &Receipt, current: &Receipt) -> Result<Value> {
         for (a, b) in a.media.iter().zip(&b.media) {
             let (a, b) = (a.source(), b.source());
             ensure!(
-                a.media_type == b.media_type && a.size == b.size && a.sha256 == b.sha256,
-                "parity media bytes differ"
+                a.media_type == b.media_type && a.size == b.size,
+                "parity media type/size differs"
             );
         }
         cosine_min = cosine_min.min(cosine(&a.vector, &b.vector));
@@ -797,10 +885,10 @@ async fn run(
     );
     for (index, case) in manifest.cases.iter().enumerate() {
         let started = Instant::now();
-        let sources = authorized_sources(&client, case).await?;
+        let sources = authorized_sources(&client, &installation.http, case).await?;
         record(
             report,
-            "resources/read Artifact identities",
+            "tools/call Artifact download grants and independent fixture byte checks",
             started,
             json!({"case":case.name,"mediaParts":sources.iter().map(Vec::len).sum::<usize>()}),
         );
@@ -1117,6 +1205,7 @@ async fn run_negative(
         if let NegativeExpectation::RuntimeNotStarted { .. } = case.expect {
             let sources = authorized_sources(
                 &client,
+                &installation.http,
                 &Case {
                     name: case.name.clone(),
                     input: case.input.clone(),
@@ -1344,4 +1433,89 @@ fn parity_enforces_the_prescoring_component_threshold_even_when_cosine_passes() 
         ) >= 0.9999
     );
     assert!(parity(&previous, &current).is_err());
+}
+
+#[tokio::test]
+async fn fixture_fingerprints_are_checked_by_the_test_caller_with_bounded_signed_gets() -> Result<()>
+{
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let requests = Arc::new(AtomicUsize::new(0));
+    let seen = requests.clone();
+    let body = b"independent synthetic fixture bytes";
+    let app = axum::Router::new().route(
+        "/fixture",
+        axum::routing::get(move |headers: axum::http::HeaderMap| {
+            let seen = seen.clone();
+            async move {
+                seen.fetch_add(1, Ordering::SeqCst);
+                if headers
+                    .get("X-Fixture-Grant")
+                    .is_none_or(|value| value != "synthetic-only")
+                {
+                    return (axum::http::StatusCode::FORBIDDEN, Vec::new());
+                }
+                (axum::http::StatusCode::OK, body.to_vec())
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let server = tokio::spawn(async move { axum::serve(listener, app).await });
+    let result = tokio::time::timeout(Duration::from_secs(5), async {
+        let http = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?;
+        let mut transfer = SignedTransfer {
+            method: TransferMethod::Get,
+            url: veoveo_mcp_artifact::contract::SignedUrl::parse(format!(
+                "http://{address}/fixture?synthetic-private-signature"
+            ))
+            .unwrap(),
+            headers: [("X-Fixture-Grant".into(), "synthetic-only".into())].into(),
+            expires_at: chrono::Utc::now() + chrono::TimeDelta::minutes(1),
+        };
+        let mut recipe = FixtureRecipe {
+            artifact_id: ArtifactId::parse(uuid::Uuid::now_v7().to_string())?,
+            media_type: veoveo_mcp_artifact::contract::MediaType::parse("image/synthetic")?,
+            size: veoveo_mcp_artifact::contract::ObjectSize::new(body.len() as u64)?,
+            sha256: veoveo_types::Sha256Digest::from_bytes(Sha256::digest(body).into()),
+            recipe: "synthetic HTTP transfer fixture; no encoded media or inference".into(),
+        };
+        verify_fixture_download(&http, &transfer, &recipe).await?;
+        recipe.sha256 = veoveo_types::Sha256Digest::from_bytes([0; 32]);
+        let error = verify_fixture_download(&http, &transfer, &recipe)
+            .await
+            .unwrap_err();
+        ensure!(
+            !error.to_string().contains("synthetic-private-signature"),
+            "a fixture failure leaked its signed URL"
+        );
+        recipe.size = veoveo_mcp_artifact::contract::ObjectSize::new(body.len() as u64 - 1)?;
+        ensure!(
+            verify_fixture_download(&http, &transfer, &recipe)
+                .await
+                .is_err(),
+            "a fixture exceeded its exact-size bound"
+        );
+        let count = requests.load(Ordering::SeqCst);
+        transfer.expires_at = chrono::Utc::now() - chrono::TimeDelta::seconds(1);
+        ensure!(
+            verify_fixture_download(&http, &transfer, &recipe)
+                .await
+                .is_err(),
+            "an expired fixture grant was used"
+        );
+        ensure!(
+            requests.load(Ordering::SeqCst) == count,
+            "an expired grant dispatched HTTP"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await;
+    server.abort();
+    result.context("fixture transfer test exceeded five seconds")?
 }

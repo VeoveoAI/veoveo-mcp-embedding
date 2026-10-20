@@ -63,9 +63,12 @@ repeated images/audio/video parts, dimensions and optional native soundtrack sep
 Soundtrack inclusion cannot coexist with separate audio parts in the batch.
 
 Before any live call, the runner validates public inputs and any baseline, including
-per-part MIME/size/SHA256 against the new recipes. Artifact IDs may differ across
-installations. It then reads safe native Artifact metadata and calls typed `embed`
-without retry. Each validated output, measured embed time and compact JSON byte/hash
+per-part MIME/size and the baseline's independent fixture-recipe fingerprints.
+Artifact IDs may differ across installations. Before inference, the test caller obtains
+typed signed downloads and streams each fixture within its exact-size bound, computing
+its own SHA-256 against the supplied recipe. This test-only evidence is not an Artifact
+metadata field or a production MCP byte-fetch path. Signed URLs/headers stay private.
+It then calls typed `embed` without retry. Each validated output, measured embed time and compact JSON byte/hash
 receipt is stored before ranking, accounting or parity assertions. Failed later checks
 retain that output. Byte evidence describes structured-result reserialization, not raw
 HTTP bytes. Daily own usage confirms selected-principal totals, not full delegation
@@ -152,7 +155,7 @@ Do not replay an ambiguous inference to repair a fixture lifecycle failure.
 
 No model call or network is needed to validate a retained safe Python fixture with exact
 keys `capabilities`, `input`, `sources`, `output`. `sources` is one array per item of
-`{partIndex,source:{artifactId,mediaType,size,sha256}}`, with no transfer grants:
+`{partIndex,source:{artifactId,mediaType,size}}`, with no transfer grants:
 
 ```sh
 VEOVEO_EMBEDDING_WIRE_FIXTURE=/absolute/retained-wire.json cargo test --locked -p veoveo-mcp-embedding --test validation actual_python_wire_is_accepted_by_rust_without_another_model_call -- --ignored --exact

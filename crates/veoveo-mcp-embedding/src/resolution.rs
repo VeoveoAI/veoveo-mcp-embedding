@@ -29,7 +29,6 @@ pub fn admitted_source(
 ) -> Result<RuntimeSource, ResolutionError> {
     let artifact = result.artifact;
     let size = artifact.size.ok_or(ResolutionError::Invalid)?;
-    let sha256 = artifact.sha256.ok_or(ResolutionError::Invalid)?;
     let mime = artifact.media_type.as_str();
     let family = match modality {
         Modality::Image => mime.starts_with("image/"),
@@ -51,7 +50,6 @@ pub fn admitted_source(
         artifact_id: id,
         media_type: artifact.media_type,
         size,
-        sha256,
         get: result.get,
     })
 }

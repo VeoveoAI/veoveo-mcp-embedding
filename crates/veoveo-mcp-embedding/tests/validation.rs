@@ -16,7 +16,6 @@ fn source(kind: &str) -> RuntimeSource {
         artifact_id: ArtifactId::parse(uuid::Uuid::now_v7().to_string()).unwrap(),
         media_type: MediaType::parse(format!("{kind}/synthetic")).unwrap(),
         size: ObjectSize::new(3).unwrap(),
-        sha256: Sha256Digest::from_bytes([0; 32]),
         get: SignedTransfer {
             method: TransferMethod::Get,
             url: SignedUrl::parse("http://private.test:9000/object?synthetic-secret=do-not-log")
@@ -139,6 +138,22 @@ fn frozen_python_jcs_bytes_match_rust_for_unicode_and_numeric_equivalence() {
     assert_ne!(hashes[0], hashes[2]);
 }
 #[test]
+fn media_source_contract_has_no_inherited_content_checksum() {
+    let source = source("image");
+    let mut private = serde_json::to_value(&source).unwrap();
+    let public = serde_json::to_value(source.identity()).unwrap();
+    assert!(private.get("sha256").is_none());
+    assert!(public.get("sha256").is_none());
+    private["sha256"] = json!(Sha256Digest::from_bytes([0; 32]));
+    assert!(serde_json::from_value::<RuntimeSource>(private).is_err());
+    let mut old_public = public;
+    old_public["sha256"] = json!(Sha256Digest::from_bytes([0; 32]));
+    assert!(serde_json::from_value::<MediaSource>(old_public).is_err());
+    let schema = serde_json::to_value(schemars::schema_for!(MediaSource)).unwrap();
+    assert!(schema["properties"].get("sha256").is_none());
+}
+
+#[test]
 fn repeated_modalities_and_repeated_native_indices_keep_joint_order_and_private_boundary() {
     let (request, result) = joint();
     request.validate().unwrap();
@@ -206,7 +221,7 @@ fn tampered_media_processing_identity_coverage_cardinality_and_order_are_refused
             }
             10 => {
                 if let MediaCoverage::Audio { source, .. } = &mut result.items[0].media[1] {
-                    source.sha256 = Sha256Digest::from_bytes([1; 32]);
+                    source.size = ObjectSize::new(4).unwrap();
                 }
             }
             11 => {

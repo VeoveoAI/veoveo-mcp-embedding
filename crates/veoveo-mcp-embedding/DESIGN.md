@@ -77,17 +77,19 @@ must fit 8192/item and 16384/batch; all preflight precedes the first model forwa
 The service declares Artifact read use. Native ServerCalls are configured from the
 same registration key/metadata/HTTP client; handlers use `ctx.client()` and typed
 CreateDownloadRequest through the Hub. Artifact owns ACL and immutable availability.
-MCP requires the exact requested ID, Available state, known positive bounded size and
-SHA256, the matching MIME family (audio also accepts video containers), and a live GET.
+MCP requires the exact requested ID, Available state, known positive bounded size,
+the matching MIME family (audio also accepts video containers), and a live GET.
 It checks aggregate sizes before any runtime dispatch. No bulk bytes pass through MCP.
+ArtifactID and create-only storage identify the object; consumers own any content
+fingerprint independently of Artifact metadata.
 
 The private server-only DTO replaces Artifact references with their authorized
-identity/mediaType/size/digest plus Artifact's actual typed SignedTransfer. Empty
+identity/mediaType/size plus Artifact's actual typed SignedTransfer. Empty
 headers may be omitted. URLs/headers never enter public schemas, results, errors,
 Debug output or logs. Private serialized payload also must fit 512 KiB; public text
 bounds alone do not constrain signed-header expansion. Runtime independently enforces
-its configured storage origin, no redirects/proxies, elapsed deadline, raw byte/size/hash
-and native decoded bounds. Verified temporary files remain owned by its actual worker.
+its configured storage origin, no redirects/proxies, elapsed deadline, exact raw byte size
+and native decoded bounds. Size-checked temporary files remain owned by its actual worker.
 Metadata validation and repeated bounded native decodes are explicit runtime costs.
 
 All references resolve before inference usage reservation. Text-only requests require
@@ -152,10 +154,10 @@ prove actual Artifact SQL ACL or real inference. Artifact's own tests and deploy
 real Artifact probes supply that separate evidence. No content is persisted here.
 
 The ignored acceptance runner consumes a new external corpus/capacity manifest with
-public inputs, exact Artifact bytes/hash/recipes, optional expected tokens and explicit
+public inputs, independently checked fixture bytes/hash/recipes, optional expected tokens and explicit
 ranking expectations. It reserves a new report, validates offline input/baseline before
-live entry, reads safe Artifact resources (no signed transfers), makes serial native
-embedding calls, validates whole outputs and exact own-usage deltas, and records timings,
+live entry, obtains typed signed downloads and independently fingerprints bounded
+fixture bytes in the test caller, makes serial native embedding calls, validates whole outputs and exact own-usage deltas, and records timings,
 request IDs, output identities and compact structured-result byte hashes. Own daily
 usage does not establish full request/delegation attribution. Cross-device parity
 requires matching processing and source bytes, even if Artifact IDs differ. Real-media

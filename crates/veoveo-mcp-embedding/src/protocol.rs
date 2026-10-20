@@ -11,7 +11,6 @@ pub struct RuntimeSource {
     pub artifact_id: ArtifactId,
     pub media_type: veoveo_mcp_artifact::contract::MediaType,
     pub size: veoveo_mcp_artifact::contract::ObjectSize,
-    pub sha256: Sha256Digest,
     pub get: SignedTransfer,
 }
 impl RuntimeSource {
@@ -20,7 +19,6 @@ impl RuntimeSource {
             artifact_id: self.artifact_id,
             media_type: self.media_type.clone(),
             size: self.size,
-            sha256: self.sha256.clone(),
         }
     }
 }
