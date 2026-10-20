@@ -944,7 +944,8 @@ async fn qualify(kind: &str, composed: bool) -> Result<()> {
             );
             let outcome = if let Some(probe) = probe {
                 probe
-                    .run(inspection, || {
+                    .run(inspection, |readiness| {
+                        report["compositionReadiness"] = json!(readiness);
                         run(
                             inspection,
                             &manifest,

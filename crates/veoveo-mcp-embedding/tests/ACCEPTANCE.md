@@ -125,13 +125,19 @@ server with one typed `forward_embed` tool and declared embedding-create use. It
 no Tasks and adds no production route. The single corpus case calls caller → Embedding
 → Artifact through native SDK ServerCalls; use a joint media case to exercise both hops.
 
-Root/builder must first admit the public endpoint, bind address and existing registration
-credential custody. Set `VEOVEO_ACCEPTANCE_COMPOSED_PROBE=1`, plus prefixed variables
+Root/builder must first admit the exact logical HTTP endpoint, fixed bind address, startup
+native Hub binding and existing registration credential custody. A ServiceExposure alone
+does not install a Hub binding, and no separate ingress exposure is needed. Set `VEOVEO_ACCEPTANCE_COMPOSED_PROBE=1`, plus prefixed variables
 `PROBE_PUBLIC_BASE_URL`, `PROBE_BIND` (explicit nonzero socket port),
 `PROBE_ALLOWED_HOSTS` (comma-separated admitted authorities), `REGISTRATION_SECRET_ENV`
 (existing environment selector). `PROBE_ALLOW_LOOPBACK=1` is explicit and only for the
-operator's admitted deployment. The runner changes no network policy and uses no
-alternate loopback/proxy route for readiness. Its native ephemeral signing key is only
+operator's admitted deployment. The runner changes no network policy. Native readiness
+uses the existing member through native HubClient tools/list and read_resource at
+embeddingprobe://contract. It requires embeddingprobe__forward_embed and the exact native
+hosted-MCP declaration for server embeddingprobe. Metadata reads can poll within the
+ten-second phase; the inference runner is invoked once. Readiness counts/timing and the
+validated declaration are preserved in compositionReadiness. There is no direct /livez
+request or alternate loopback/proxy route. Its native ephemeral signing key is only
 for this registration, not a replacement registration credential.
 
 Discovery/registration/store/instance/readiness/shutdown phases are bounded by ten

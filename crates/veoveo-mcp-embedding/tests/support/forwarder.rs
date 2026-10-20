@@ -116,3 +116,39 @@ impl DomainServer for Forwarder {
         &CALLER_ROUTES
     }
 }
+
+/// Native HubClient::read_resource owns transport and routing. The hosted-MCP
+/// declaration does not implement SingleOutput, so decode its native type directly.
+pub const PROBE_CONTRACT_URI: &str = "embeddingprobe://contract";
+pub fn probe_contract_uri() -> veoveo_types::ResourceUri {
+    veoveo_types::ResourceUri::new(PROBE_CONTRACT_URI).expect("static native contract URI")
+}
+pub fn decode_probe_contract(
+    result: rmcp::model::ReadResourceResult,
+) -> Result<veoveo_hub_sdk::docs::ContractDeclaration, &'static str> {
+    let [
+        rmcp::model::ResourceContents::TextResourceContents {
+            uri,
+            mime_type,
+            text,
+            ..
+        },
+    ] = result.contents.as_slice()
+    else {
+        return Err("native probe contract content cardinality/type differs");
+    };
+    if uri != PROBE_CONTRACT_URI
+        || mime_type.as_deref() != Some("application/json")
+        || text.len() > 4096
+    {
+        return Err("native probe contract URI/MIME/bound differs");
+    }
+    let contract: veoveo_hub_sdk::docs::ContractDeclaration =
+        serde_json::from_str(text).map_err(|_| "native probe contract JSON differs")?;
+    if contract.server() != &ForwarderContract::slug()
+        || contract.contract() != veoveo_hub_sdk::docs::ContractId::HostedMcp
+    {
+        return Err("native probe contract identity differs");
+    }
+    Ok(contract)
+}

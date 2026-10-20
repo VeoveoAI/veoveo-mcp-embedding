@@ -293,6 +293,47 @@ fn native_artifact_metadata_allows_audio_from_video_container_without_widening_o
     assert_eq!(artifact.server_config().server_info.name, "artifact");
     assert_eq!(artifact.documents().server(), "artifact");
     let caller = Forwarder::setup();
+    use rmcp::model::{ReadResourceResult, ResourceContents};
+    use support::forwarder::{PROBE_CONTRACT_URI, decode_probe_contract, probe_contract_uri};
+    let content = |uri: &str, value: serde_json::Value| {
+        ResourceContents::text(serde_json::to_string(&value).unwrap(), uri)
+            .with_mime_type("application/json")
+    };
+    let good = serde_json::json!({"contract":"https://veoveo.ai/contracts/hosted-mcp","server":"embeddingprobe"});
+    assert_eq!(probe_contract_uri().as_str(), PROBE_CONTRACT_URI);
+    let parsed = decode_probe_contract(ReadResourceResult::new(vec![content(
+        PROBE_CONTRACT_URI,
+        good.clone(),
+    )]))
+    .unwrap();
+    assert_eq!(parsed.server().as_str(), "embeddingprobe");
+    for value in [
+        serde_json::json!({"contract":"https://veoveo.ai/contracts/hosted-mcp","server":"embedding"}),
+        serde_json::json!({"contract":"https://example.test/other","server":"embeddingprobe"}),
+        serde_json::json!({"contract":"https://veoveo.ai/contracts/hosted-mcp","server":"embeddingprobe","unexpected":true}),
+    ] {
+        assert!(
+            decode_probe_contract(ReadResourceResult::new(vec![content(
+                PROBE_CONTRACT_URI,
+                value
+            )]))
+            .is_err()
+        );
+    }
+    assert!(
+        decode_probe_contract(ReadResourceResult::new(vec![content(
+            "embedding://contract",
+            good.clone()
+        )]))
+        .is_err()
+    );
+    assert!(
+        decode_probe_contract(ReadResourceResult::new(vec![
+            content(PROBE_CONTRACT_URI, good.clone()),
+            content(PROBE_CONTRACT_URI, good)
+        ]))
+        .is_err()
+    );
     assert_eq!(caller.server_config().server_info.name, "embeddingprobe");
     assert_eq!(caller.documents().server(), "embeddingprobe");
 

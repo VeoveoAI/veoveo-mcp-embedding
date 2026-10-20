@@ -2,10 +2,14 @@
 //! credential selector and an admitted endpoint; this code installs no policy.
 use crate::{
     Installation, bearer, required,
-    support::forwarder::{Forwarder, ForwarderContract},
+    support::forwarder::{Forwarder, ForwarderContract, decode_probe_contract, probe_contract_uri},
 };
 use anyhow::{Result, anyhow, ensure};
-use std::{future::Future, net::SocketAddr, time::Duration};
+use std::{
+    future::Future,
+    net::SocketAddr,
+    time::{Duration, Instant},
+};
 use veoveo_hub_sdk::{
     PublicDeployment,
     hosting::{DomainServer, Hosted, HostedServer, ServerCalls},
@@ -31,6 +35,15 @@ impl Drop for AbortOnDrop {
     fn drop(&mut self) {
         self.0.abort();
     }
+}
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProbeReadiness {
+    tools_list_calls: usize,
+    contract_reads: usize,
+    elapsed_ms: f64,
+    contract: veoveo_hub_sdk::docs::ContractDeclaration,
+    tool: &'static str,
 }
 pub struct ProbeConfig {
     deployment: PublicDeployment,
@@ -79,7 +92,7 @@ impl ProbeConfig {
     }
     pub async fn run<F, Fut>(&self, installation: &Installation, runner: F) -> Result<()>
     where
-        F: FnOnce() -> Fut,
+        F: FnOnce(ProbeReadiness) -> Fut,
         Fut: Future<Output = Result<()>>,
     {
         let slug = ForwarderContract::slug();
@@ -162,29 +175,36 @@ impl ProbeConfig {
                             let _ = stopped.await;
                         }));
                         let _abort = AbortOnDrop(serving.abort_handle());
-                        // Reachability uses the operator's admitted public origin;
-                        // it never chooses an alternate loopback/proxy route.
-                        let mounted = self.deployment.server(slug.as_str())
-                            .map_err(|_| anyhow!("invalid probe mount"))?;
-                        let mut origin = url::Url::parse(mounted.public_url())
-                            .map_err(|_| anyhow!("invalid probe readiness origin"))?;
-                        origin.set_path("/livez");
+                        // The Hub is the actual caller. Its native routing must
+                        // discover this exact fixture, not a separate ingress URL.
+                        let discovery = installation.client(&installation.member)?;
                         let ready = async {
+                            let started = Instant::now();
+                            let (mut tools_list_calls, mut contract_reads) = (0, 0);
                             for _ in 0..40 {
-                                if installation.http.get(origin.clone())
-                                    .timeout(Duration::from_secs(1)).send().await
-                                    .is_ok_and(|response| response.status().is_success()) {
-                                    return Ok(());
+                                tools_list_calls += 1;
+                                if let Ok(tools) = discovery.tools().await
+                                    && tools.items.iter().any(|tool| tool.name == "embeddingprobe__forward_embed") {
+                                    contract_reads += 1;
+                                    if let Ok(result) = discovery.read_resource(&probe_contract_uri()).await {
+                                        let contract = decode_probe_contract(result).map_err(|_| anyhow!("native probe contract response differs"))?;
+                                        return Ok(ProbeReadiness {
+                                            tools_list_calls, contract_reads,
+                                            elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
+                                            contract, tool: "embeddingprobe__forward_embed",
+                                        });
+                                    }
                                 }
+                                // Only metadata reads poll; no inference is retried.
                                 tokio::time::sleep(Duration::from_millis(100)).await;
                             }
-                            Err(anyhow!("probe admitted endpoint did not become live"))
+                            Err(anyhow!("native Hub did not discover the exact probe contract"))
                         };
                         let mut listener_ended = false;
                         let result = async {
-                            phase(ready, "probe readiness deadline").await?;
+                            let readiness = phase(ready, "native probe discovery readiness deadline").await?;
                             tokio::select! {
-                                result = tokio::time::timeout(Duration::from_secs(120), runner()) => {
+                                result = tokio::time::timeout(Duration::from_secs(120), runner(readiness)) => {
                                     result.map_err(|_| anyhow!("probe work deadline; execution/accounting may be incomplete; no replay"))?
                                 }
                                 () = instance.lost() => Err(anyhow!("probe process instance lost")),
