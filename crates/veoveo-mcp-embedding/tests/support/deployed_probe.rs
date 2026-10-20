@@ -46,6 +46,7 @@ pub struct ProbeReadiness {
     tool: &'static str,
 }
 pub struct ProbeConfig {
+    deployment_id: veoveo_hub_sdk::DeploymentId,
     deployment: PublicDeployment,
     bind: SocketAddr,
     secret: secrecy::SecretString,
@@ -58,6 +59,8 @@ impl ProbeConfig {
             std::env::var("VEOVEO_ACCEPTANCE_COMPOSED_PROBE").as_deref() == Ok("1"),
             "explicit COMPOSED_PROBE=1 required"
         );
+        let deployment_id = veoveo_hub_sdk::DeploymentId::parse(required("PROBE_DEPLOYMENT_ID")?)
+            .map_err(|_| anyhow!("invalid admitted probe deployment UUIDv7"))?;
         let deployment = PublicDeployment::new(&required("PROBE_PUBLIC_BASE_URL")?)
             .map_err(|_| anyhow!("invalid admitted probe origin"))?;
         let bind: SocketAddr = required("PROBE_BIND")?
@@ -82,6 +85,7 @@ impl ProbeConfig {
             "admitted probe host authorities required"
         );
         Ok(Self {
+            deployment_id,
             deployment,
             bind,
             secret,
@@ -101,6 +105,7 @@ impl ProbeConfig {
             .server(slug.as_str())
             .map_err(|_| anyhow!("invalid probe mount"))?;
         let declaration = RegistrationDeclaration {
+            deployment: self.deployment_id,
             slug: slug.clone(),
             uri_scheme: ForwarderContract::scheme(),
             version: ServerVersion::new(env!("CARGO_PKG_VERSION"))
@@ -140,7 +145,7 @@ impl ProbeConfig {
         )
         .await?;
         let mut outcome = None;
-        // Native maintain always deregisters after the owned fixture future ends.
+        // Process stop preserves credentials; this disposable fixture explicitly retires afterward.
         let maintained = client
             .maintain(registration.clone(), async {
                 outcome = Some(async {
@@ -233,8 +238,13 @@ impl ProbeConfig {
             .await;
         ensure!(
             maintained.is_ok(),
-            "native probe deregistration failed; operator must inspect registration state"
+            "native probe lifecycle failed; operator must inspect registration state"
         );
+        phase(
+            client.deregister(registration),
+            "native probe retirement failed",
+        )
+        .await?;
         outcome.ok_or_else(|| anyhow!("probe lifecycle did not run"))?
     }
 }

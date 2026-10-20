@@ -1,6 +1,6 @@
 //! The hosted process: register with the Hub, connect with the registration's
 //! database login, hold a process instance, migrate, then serve MCP until SIGTERM or
-//! Ctrl-C or until the instance loses its lock. Stopping deletes the registration.
+//! Ctrl-C or until the instance loses its lock. Process stop preserves native resume credentials.
 mod config;
 mod registration;
 
@@ -28,19 +28,24 @@ use config::Args;
 pub async fn run() -> Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let _ = dotenvy::dotenv();
-    let _telemetry: TelemetryGuard =
-        init_server_telemetry("veoveo-mcp-embedding", "info,veoveo_mcp_embedding=debug")?;
     let args = Args::parse();
     let deployment = args.public_deployment()?;
-    let declaration = mcp::registration(&deployment)?;
+    let declaration = mcp::registration(&deployment, args.deployment_id)?;
     mcp::REGISTRATION
         .set(declaration.clone())
         .map_err(|_| anyhow::anyhow!("the registration was declared twice"))?;
     mcp::force_setup();
+    if args.describe_registration {
+        let metadata = registration::prepare(&args, declaration)?;
+        serde_json::to_writer_pretty(std::io::stdout().lock(), &metadata)?;
+        println!();
+        return Ok(());
+    }
+    let _telemetry: TelemetryGuard =
+        init_server_telemetry("veoveo-mcp-embedding", "info,veoveo_mcp_embedding=debug")?;
     let (client, registration, http, calls) = registration::register(&args, declaration).await?;
-    // The registration lasts while the server's login holds a live process instance.
-    // Once serving ends, on SIGTERM or Ctrl-C or on a failure, the client deletes it,
-    // which also drops the login.
+    // Process stop preserves native registration for resume; retirement is explicit.
+    // The Hub retains its existing orphan grace.
     let issued = registration.clone();
     let mut served = None;
     let maintained = client
@@ -49,7 +54,7 @@ pub async fn run() -> Result<()> {
         })
         .await;
     if let Err(error) = maintained {
-        tracing::warn!(%error, "the server could not remove its registration");
+        tracing::warn!(%error, "registration lifecycle failed");
     }
     served.context("the registration ended before serving finished")?
 }
@@ -84,9 +89,18 @@ async fn serve(
         .await
         .context("declaring embedding usage")?;
     let runtime = RuntimeClient::new(
-        args.runtime_url.clone(),
-        args.runtime_token.clone(),
-        if args.device == "mps" {
+        args.runtime_url
+            .clone()
+            .context("serving requires a runtime URL")?,
+        args.runtime_token
+            .clone()
+            .context("serving requires a runtime token")?,
+        if args
+            .device
+            .as_deref()
+            .context("serving requires a device")?
+            == "mps"
+        {
             Device::Mps
         } else {
             Device::Cuda

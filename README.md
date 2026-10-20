@@ -20,12 +20,28 @@ Tests using the native Core fixture require PostgreSQL 18.6 programs on PATH, as
 
 ## Configure and run
 
-The private MCP service uses port 8803, slug embedding and `/embedding/mcp`. Normal SDK registration issues its database login; persist only its registration-key directory. Configure these through trusted installation state:
+The private MCP service uses port 8803, slug embedding and `/embedding/mcp`. Normal SDK registration issues its database login; persist its private key directory and native RFC 7592 registration credentials together. Configure these through trusted installation state:
 
+- VEOVEO_DEPLOYMENT_ID: the admitted immutable UUIDv7 deployment identity, reused across process restarts.
 - VEOVEO_HUB_ISSUER, VEOVEO_PUBLIC_BASE_URL, VEOVEO_REGISTRATION_SECRET (native opaque placeholder), VEOVEO_KEY_DIRECTORY, approved host authorities.
 - VEOVEO_EMBEDDING_RUNTIME_URL: fixed private origin, initially `http://host.openshell.internal:8804` only after native loopback reachability is qualified.
 - VEOVEO_EMBEDDING_RUNTIME_TOKEN: native provider placeholder, never a real token in the author workload.
 - VEOVEO_EMBEDDING_DEVICE: explicit mps or cuda; no fallback.
+
+Offline admission preparation uses the same typed metadata and durable worker key as
+serving. It requires no runtime credentials, inference, Hub connection or database:
+
+```sh
+veoveo-mcp-embedding --describe-registration --deployment-id <admitted-uuidv7> \
+  --public-base-url <admitted-origin> --key-directory <private-persistent-directory>
+```
+
+The output is public registration metadata, not a grant. Serving still requires the
+runtime/device and Hub settings above. Ordinary restarts resume the saved registration;
+process stop does not deregister. Refused/expired registration requires fresh scoped
+admission from trusted reconciliation; no namespace/global credential fallback occurs.
+Explicit retirement deletes the registration separately. This adoption changes no
+multimodal, Artifact authorization or inference semantics.
 
 ```sh
 cargo run --locked --bin veoveo-mcp-embedding

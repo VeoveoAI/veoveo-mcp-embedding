@@ -277,7 +277,11 @@ async fn typed_artifact_resolution_is_caller_bound_direct_and_composed_before_in
         for composed in [false,true] {let answer=if composed {mesh.call("embeddingprobe","forward_embed",serde_json::json!({"request":request})).await}else{mesh.call("embedding","embed",request.clone()).await};
             assert_ne!(answer["result"]["isError"],true,"{answer}");let result:EmbeddingResult=serde_json::from_value(answer["result"]["structuredContent"].clone()).unwrap();
             assert_eq!(result.items.len(),2);assert_eq!(result.dimensions,Dimensions::D256);assert_eq!(result.items[1].media.len(),2);
-            let seen=artifact.seen.lock().unwrap();let identity=seen.last().unwrap();assert_eq!(identity.acting_server().unwrap().as_str(),"embedding");assert_eq!(identity.client.as_str(),testing::TEST_CLIENT);
+            let seen=artifact.seen.lock().unwrap();let identity=seen.last().unwrap();
+            assert_eq!(identity.deployment,testing::deployment_id());
+            assert_eq!(identity.request_context.as_ref().unwrap().execution,testing::execution_context());
+            assert_eq!(identity.acting_server.as_ref().unwrap().deployment,testing::deployment_id());
+            assert_eq!(identity.acting_server().unwrap().as_str(),"embedding");assert_eq!(identity.client.as_str(),testing::TEST_CLIENT);
             assert_eq!(identity.delegation_context.as_ref().map_or(0,|c|c.actors.len()),usize::from(composed));
             if composed {assert_eq!(identity.delegation_context.as_ref().unwrap().actors[0].server.as_str(),"embeddingprobe");}
             assert!(!serde_json::to_string(&result).unwrap().contains("synthetic-secret"));

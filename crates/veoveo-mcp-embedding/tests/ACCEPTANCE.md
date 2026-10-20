@@ -128,7 +128,7 @@ no Tasks and adds no production route. The single corpus case calls caller → E
 Root/builder must first admit the exact logical HTTP endpoint, fixed bind address, startup
 native Hub binding and existing registration credential custody. A ServiceExposure alone
 does not install a Hub binding, and no separate ingress exposure is needed. Set `VEOVEO_ACCEPTANCE_COMPOSED_PROBE=1`, plus prefixed variables
-`PROBE_PUBLIC_BASE_URL`, `PROBE_BIND` (explicit nonzero socket port),
+`PROBE_DEPLOYMENT_ID` (admitted UUIDv7), `PROBE_PUBLIC_BASE_URL`, `PROBE_BIND` (explicit nonzero socket port),
 `PROBE_ALLOWED_HOSTS` (comma-separated admitted authorities), `REGISTRATION_SECRET_ENV`
 (existing environment selector). `PROBE_ALLOW_LOOPBACK=1` is explicit and only for the
 operator's admitted deployment. The runner changes no network policy. Native readiness
@@ -142,7 +142,7 @@ for this registration, not a replacement registration credential.
 
 Discovery/registration/store/instance/readiness/shutdown phases are bounded by ten
 seconds each; composed work by 120 seconds, individual calls by 65 seconds. Native
-maintain deregisters after work/cleanup; its HTTP request has the native ten-second SDK timeout. The listener
+explicit RFC 7592 retirement deregisters after work/cleanup; its HTTP request has the native ten-second SDK timeout. The listener
 is aborted on drop, normal shutdown waits at most ten seconds, then the process instance
 and store are closed. Abrupt process termination or failed deregistration requires the
 operator to inspect native registration/instance state; the receipt reports failure.

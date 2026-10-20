@@ -12,18 +12,18 @@ publish = false
 
 [workspace.dependencies]
 # veoveo-core, pinned to one revision for every core crate.
-veoveo-fixtures = { git = "https://github.com/VeoveoAI/veoveo-core", rev = "433ed5f3a054e44da0bcb4aece2154ef695aeb07" }
-veoveo-store = { git = "https://github.com/VeoveoAI/veoveo-core", rev = "433ed5f3a054e44da0bcb4aece2154ef695aeb07" }
-veoveo-types = { git = "https://github.com/VeoveoAI/veoveo-core", rev = "433ed5f3a054e44da0bcb4aece2154ef695aeb07" }
-veoveo-usage = { git = "https://github.com/VeoveoAI/veoveo-core", rev = "433ed5f3a054e44da0bcb4aece2154ef695aeb07" }
+veoveo-fixtures = { git = "https://github.com/VeoveoAI/veoveo-core", rev = "1dd9994073515a85f90c3b5c71598366ab804a28" }
+veoveo-store = { git = "https://github.com/VeoveoAI/veoveo-core", rev = "1dd9994073515a85f90c3b5c71598366ab804a28" }
+veoveo-types = { git = "https://github.com/VeoveoAI/veoveo-core", rev = "1dd9994073515a85f90c3b5c71598366ab804a28" }
+veoveo-usage = { git = "https://github.com/VeoveoAI/veoveo-core", rev = "1dd9994073515a85f90c3b5c71598366ab804a28" }
 chrono = { version = "=0.4.45", default-features = false, features = ["serde", "clock"] }
 
 # The Rust SDK for Veoveo MCP servers: the contract feature for declarations, the server
 # feature for hosting, registration and the forwarded identity.
-veoveo-hub-sdk = { git = "https://github.com/VeoveoAI/veoveo-hub-sdk", rev = "f369804dd2bda5c69103f480169769c80fac2859", default-features = false }
+veoveo-hub-sdk = { git = "https://github.com/VeoveoAI/veoveo-hub-sdk", rev = "cc23dc97bbe60f83e95d6e9d0c8fdcc35742d5a2", default-features = false }
 # Artifact contract shares the exact published SDK revision above.
-veoveo-mcp-artifact = { git = "https://github.com/VeoveoAI/veoveo-mcp-artifact", rev = "aa1ca94dd8e557ac3622192ff20fa756e96015ae", default-features = false }
-veoveo-hub-sdk-fixture = { git = "https://github.com/VeoveoAI/veoveo-hub-sdk", rev = "f369804dd2bda5c69103f480169769c80fac2859" }
+veoveo-mcp-artifact = { git = "https://github.com/VeoveoAI/veoveo-mcp-artifact", rev = "dbdccdba4da9d669e7cf221bb1f640ef93935118", default-features = false }
+veoveo-hub-sdk-fixture = { git = "https://github.com/VeoveoAI/veoveo-hub-sdk", rev = "cc23dc97bbe60f83e95d6e9d0c8fdcc35742d5a2" }
 serde_json_canonicalizer = "=0.3.2"
 sha2 = "=0.11.0"
 
@@ -36,6 +36,7 @@ reqwest = { version = "=0.13.5", default-features = false }
 rmcp = { version = "=3.5.0", git = "https://github.com/VeoveoAI/rust-sdk", rev = "917e7914c93975fc1eddbff8792f1e2de933bc17" }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 secrecy = "0.10.3"
+tempfile = "=3.27.0"
 tracing = "0.1.44"
 url = "=2.5.8"
 

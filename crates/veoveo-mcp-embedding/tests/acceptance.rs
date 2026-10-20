@@ -232,6 +232,7 @@ fn discovery_error_detail(error: &CallError) -> Value {
     // Initialization failures are already Transport(String) in the pinned SDK.
     // Never recover fields by parsing that string: it can contain private bodies.
     let variant = match error {
+        CallError::DeploymentMismatch => "DeploymentMismatch",
         CallError::Refused { .. } => "Refused",
         CallError::Undeclared { .. } => "Undeclared",
         CallError::Rejected { .. } => "Rejected",
