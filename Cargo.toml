@@ -20,10 +20,10 @@ chrono = { version = "=0.4.45", default-features = false, features = ["serde", "
 
 # The Rust SDK for Veoveo MCP servers: the contract feature for declarations, the server
 # feature for hosting, registration and the forwarded identity.
-veoveo-hub-sdk = { git = "https://github.com/VeoveoAI/veoveo-hub-sdk", rev = "b2304759b07f3e1d07cd1bf9ec9a182c6dcddd65", default-features = false }
+veoveo-hub-sdk = { git = "https://github.com/VeoveoAI/veoveo-hub-sdk", rev = "581fdcb5af2f85a7f59293f3f92e3cb32e37c8f3", default-features = false }
 # Artifact contract shares the exact published SDK revision above.
-veoveo-mcp-artifact = { git = "https://github.com/VeoveoAI/veoveo-mcp-artifact", rev = "5094935d1ec9551efd3ab8ac5351f1bf1d07db2c", default-features = false }
-veoveo-hub-sdk-fixture = { git = "https://github.com/VeoveoAI/veoveo-hub-sdk", rev = "b2304759b07f3e1d07cd1bf9ec9a182c6dcddd65" }
+veoveo-mcp-artifact = { git = "https://github.com/VeoveoAI/veoveo-mcp-artifact", rev = "a0566b8729f518f3aec14e92289dd28f66f5c189", default-features = false }
+veoveo-hub-sdk-fixture = { git = "https://github.com/VeoveoAI/veoveo-hub-sdk", rev = "581fdcb5af2f85a7f59293f3f92e3cb32e37c8f3" }
 serde_json_canonicalizer = "=0.3.2"
 sha2 = "=0.11.0"
 
