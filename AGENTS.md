@@ -1,6 +1,7 @@
 # Agent instructions
 
 - This standalone Rust MCP follows the native Veoveo template/SDK/Core contracts. Read the crate's AGENTS.md and DESIGN.md.
+- The design is in [crates/veoveo-mcp-embedding/DESIGN.md](crates/veoveo-mcp-embedding/DESIGN.md). Change it in the same change as the code.
 - Work only in the assigned worktree; preserve concurrent work. The coordinator owns architecture and rollout, the builder owns full checks/builds/deployments. No subagents or model-provider calls during iteration.
 - Pin dependencies to reviewed revisions. Keep the `contract` feature free of runtime/network/database dependencies.
 - Generate embeddings only. No Knowledge adaptation, vector storage/search, pgvector, compatibility migrations or extra orchestration.
