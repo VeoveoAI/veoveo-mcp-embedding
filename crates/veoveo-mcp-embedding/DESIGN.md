@@ -2,8 +2,7 @@
 
 This service owns typed MCP discovery, native caller-bound Artifact authorization and
 Core usage. The private runtime owns bounded media transfer/decoding and the full
-pinned GPU model. Historical purpose-based text-only deployment evidence does not
-qualify this replacement. No vector storage, search, Knowledge integration, custom
+pinned GPU model. No vector storage, search, Knowledge integration, custom
 sampler, clipping/chunking/aggregation, model choice or compatibility route is added.
 
 ## Public ordered API
@@ -68,8 +67,8 @@ long-media chunking or aggregation would be separate proposed pre/postprocessing
 Initial Veoveo service bounds are 8 items, 16 parts/item, 32 parts/batch, 64 KiB total UTF-8
 text/prompt, 64 MiB/source and 128 MiB aggregate transfer; 16 MP/image or frame and 64 MP
 aggregate selected pixels; 300 seconds/source and 600 seconds aggregate decoded audio; video fps ≤ 120
-and maxFrames ≤ 256. These defensive limits require deployed capacity qualification,
-and are not Google capability or semantic-quality guarantees. Actual native tokens
+and maxFrames ≤ 256. These are defensive limits, not Google capability or
+semantic-quality guarantees. Actual native tokens
 must fit 8192/item and 16384/batch; all preflight precedes the first model forward.
 
 ## Artifact and private runtime boundary
