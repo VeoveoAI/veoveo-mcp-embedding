@@ -145,13 +145,12 @@ Core cannot represent reject before reservation. Earlier originating Task constr
 remain in the signed SDK/Hub chain and are not relabeled under the immediate actor.
 Full actor history is Hub/SDK provenance, beyond Core's single-via usage record.
 
-## Qualification boundaries
+## Verification
 
 Component tests use explicitly synthetic vectors/media metadata and a simulated
 Artifact grant/denial handler. Native SDK Mesh tests prove direct/composed delegation,
 permission checks, ordered resolution and no runtime/usage on refusal; they do not
-prove actual Artifact SQL ACL or real inference. Artifact's own tests and deployed
-real Artifact probes supply that separate evidence. No content is persisted here.
+prove actual Artifact SQL ACL or real inference. No content is persisted here.
 
 The ignored acceptance runner consumes a new external corpus/capacity manifest with
 public inputs, independently checked fixture bytes/hash/recipes, optional expected tokens and explicit
@@ -160,9 +159,7 @@ live entry, obtains typed signed downloads and independently fingerprints bounde
 fixture bytes in the test caller, makes serial native embedding calls, validates whole outputs and exact own-usage deltas, and records timings,
 request IDs, output identities and compact structured-result byte hashes. Own daily
 usage does not establish full request/delegation attribution. Cross-device parity
-requires matching processing and source bytes, even if Artifact IDs differ. Real-media
-repeated-modality cases, deployed composed calls and quality rankings remain explicit
-coordinator scenarios, never inferred from synthetic tests. An external retained Python
+requires matching processing and source bytes, even if Artifact IDs differ. An external retained Python
 wire fixture can exercise the Rust producer/consumer boundary without another model call.
 
 
