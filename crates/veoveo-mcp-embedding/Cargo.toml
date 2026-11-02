@@ -43,6 +43,7 @@ server = [
     "tokio/signal",
     "dep:tracing",
     "dep:url",
+    "dep:veoveo-skills",
     "dep:veoveo-store",
     "dep:veoveo-usage",
     "dep:chrono",
@@ -52,7 +53,12 @@ server = [
     "reqwest/stream",
 ]
 
+[build-dependencies]
+# Embeds the skills under skills/ at build time.
+veoveo-skills = { workspace = true, features = ["build"] }
+
 [dependencies]
+veoveo-skills = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }

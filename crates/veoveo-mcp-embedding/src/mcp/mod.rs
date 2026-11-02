@@ -56,7 +56,6 @@ impl EmbeddingMcp {
         let actor = UsageActor {
             tenant: identity.authority.tenant,
             principal: identity.actor.id,
-            work_context: identity.authority.work_context,
         };
         let id = uuid::Uuid::now_v7();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(REQUEST_SECONDS);

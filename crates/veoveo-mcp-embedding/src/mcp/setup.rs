@@ -1,11 +1,12 @@
-//! The server's checked contract: slug, scheme, scope, documents, the fixed resources it
-//! lists and the embeddings it declares.
+//! The server's checked contract: slug, scheme, scope, documents, skills, the fixed
+//! resources it lists and the embeddings it declares.
 use std::sync::LazyLock;
 
 use rmcp::model::{ServerCapabilities, ServerConfig};
 use veoveo_hub_sdk::{
     docs::ServerDocs,
     server_contract::{McpServerContract, McpServerSetup},
+    skills::ServerSkills,
 };
 use veoveo_types::ResourceScheme;
 
@@ -15,6 +16,10 @@ use crate::contract::{EmbeddingProvider, EmbeddingScope};
 /// `embedding://docs/{doc_id}`, `embedding://contract` and the admin document routes.
 pub(crate) static SERVER_DOCS: LazyLock<ServerDocs> =
     LazyLock::new(|| veoveo_hub_sdk::server_docs!("embedding"));
+
+/// The skills under `skills/`, embedded at build time and served at `skill://embedding/…`.
+pub(crate) static SERVER_SKILLS: LazyLock<ServerSkills> =
+    LazyLock::new(|| veoveo_hub_sdk::server_skills!("embedding"));
 
 pub struct EmbeddingContract;
 
@@ -34,6 +39,9 @@ impl McpServerContract for EmbeddingContract {
     }
     fn documents() -> &'static ServerDocs {
         &SERVER_DOCS
+    }
+    fn skills() -> &'static ServerSkills {
+        &SERVER_SKILLS
     }
     fn server_config() -> ServerConfig {
         server_config()
@@ -56,8 +64,23 @@ fn server_config() -> ServerConfig {
     let mut info = ServerConfig::default();
     info.capabilities = capabilities;
     info.server_info = rmcp::model::Implementation::new("embedding", env!("CARGO_PKG_VERSION"));
-    info.instructions = Some(
-        "Generate one normalized vector per ordered content item with the fixed full EmbeddingGemma 2 model. Combine ordered text/image/audio/video parts for a joint embedding; reference media by Artifact ID. Read embedding://capabilities for native controls, defaults and Veoveo service bounds. Dimensions default to768, with128/256/512 supported; optional request-wide promptName or prompt. Audio is not truncated unless explicitly requested. Content and vectors are transient; retries are new computation.".to_owned(),
-    );
+    info.instructions = Some(INSTRUCTIONS.to_owned());
     info
+}
+
+/// What the server is and which skill says how to use it.
+const INSTRUCTIONS: &str = "Embedding turns ordered text, image, audio and video content \
+     into normalized vectors with one fixed multimodal model, EmbeddingGemma 2. Its skill \
+     says how: skill://embedding/embed-content/SKILL.md.";
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_instructions_name_every_skill_the_server_serves() {
+        let skills = &*super::SERVER_SKILLS;
+        assert_eq!(skills.skills().len(), 1);
+        for skill in skills.skills() {
+            assert!(super::INSTRUCTIONS.contains(&skill.uri), "{}", skill.uri);
+        }
+    }
 }

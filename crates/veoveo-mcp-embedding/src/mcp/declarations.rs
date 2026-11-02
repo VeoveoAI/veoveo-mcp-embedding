@@ -28,6 +28,8 @@ pub fn registration(
         uri_scheme: EmbeddingContract::scheme(),
         version: ServerVersion::new(env!("CARGO_PKG_VERSION"))?,
         endpoint: ServerEndpoint::new(url)?,
+        surfaces: <super::EmbeddingMcp as veoveo_hub_sdk::hosting::DomainServer>::routes()
+            .surfaces(),
     })
 }
 

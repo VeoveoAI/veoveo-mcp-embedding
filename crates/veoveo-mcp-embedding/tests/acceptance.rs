@@ -32,7 +32,7 @@ use veoveo_mcp_embedding::{
     contract::*,
     provider::{validate_capabilities, validate_public_result},
 };
-use veoveo_types::{PrincipalId, TenantId, WorkContextId};
+use veoveo_types::{PrincipalId, TenantId};
 const DEADLINE: Duration = Duration::from_secs(65);
 const MAX_EVIDENCE_BYTES: usize = 16 * 1024 * 1024;
 fn required(name: &str) -> Result<String> {
@@ -65,7 +65,6 @@ struct Installation {
     restricted: Option<String>,
     principal: PrincipalId,
     tenant: TenantId,
-    context: WorkContextId,
     device: Device,
     report: PathBuf,
     baseline: Option<PathBuf>,
@@ -127,7 +126,6 @@ impl Installation {
             restricted,
             principal: PrincipalId::parse(required("PRINCIPAL")?)?,
             tenant: TenantId::parse(required("TENANT")?)?,
-            context: WorkContextId::parse(required("WORK_CONTEXT")?)?,
             device,
             report: PathBuf::from(required("REPORT")?),
             baseline: std::env::var_os("VEOVEO_ACCEPTANCE_BASELINE_REPORT").map(PathBuf::from),
@@ -998,7 +996,7 @@ async fn run(
 async fn qualify(kind: &str, composed: bool) -> Result<()> {
     let installation = Installation::load()?;
     let case_path = PathBuf::from(required("CASES_FILE")?);
-    let report = json!({"scenario":kind,"composition":composed,"server":"embedding","device":installation.device,"tenant":installation.tenant,"principal":installation.principal,"workContext":installation.context,
+    let report = json!({"scenario":kind,"composition":composed,"server":"embedding","device":installation.device,"tenant":installation.tenant,"principal":installation.principal,
         "sequence":[],"cases":[],"outputByteEvidence":"compact structured-result reserialization, not raw HTTP wire","ownUsageProofLimit":"daily own usage proves selected principal totals; full request/delegation attribution needs native Core/Hub evidence"});
     let inspection = &installation;
     run_with_evidence(
@@ -1079,11 +1077,10 @@ async fn native_hub_registered_composition_and_usage() -> Result<()> {
 struct DenialPreparation {
     artifact_id: ArtifactId,
     owner: PrincipalId,
-    work_context: WorkContextId,
     preparer: PrincipalId,
     evidence_sha256: veoveo_types::Sha256Digest,
-    /// External owner/preparer confirms existence and no selected-caller read ACL.
-    /// Different ownership within the same Work Context is insufficient.
+    /// External owner/preparer confirms existence and no selected-caller read ACL: the
+    /// owner shares it with no grant the caller holds, directly or through a group.
     caller_has_no_read_access: bool,
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -1336,7 +1333,6 @@ fn closed_negative_errors_do_not_accept_missing_ids_or_arbitrary_private_message
         prepared: Some(DenialPreparation {
             artifact_id: ArtifactId::parse(uuid::Uuid::now_v7().to_string()).unwrap(),
             owner: PrincipalId::parse("00000000-0000-7000-8000-000000000001").unwrap(),
-            work_context: WorkContextId::parse("00000000-0000-7000-8000-000000000002").unwrap(),
             preparer: PrincipalId::parse("00000000-0000-7000-8000-000000000003").unwrap(),
             evidence_sha256: veoveo_types::Sha256Digest::from_bytes([0; 32]),
             caller_has_no_read_access: true,

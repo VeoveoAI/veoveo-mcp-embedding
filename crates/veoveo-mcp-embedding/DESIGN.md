@@ -71,6 +71,15 @@ and maxFrames ≤ 256. These are defensive limits, not Google capability or
 semantic-quality guarantees. Actual native tokens
 must fit 8192/item and 16384/batch; all preflight precedes the first model forward.
 
+## Skills
+
+How an agent uses the server is in its skill `embed-content`, under `skills/`, embedded at
+build time and served at `skill://embedding/embed-content/SKILL.md` through the SDK's MCP
+Skills support (SEP-2640): items and parts, dimensions, prompt names, preprocessing, the
+answer and the limits, naming the tool as callers see it, `embedding__embed`. The
+server's `instructions` say what it is and name the skill's address. The skill file is a
+resource of the server under its document policy, `embedding.models.read`.
+
 ## Artifact and private runtime boundary
 
 The service declares Artifact read use. Native ServerCalls are configured from the
@@ -138,7 +147,7 @@ not_started runtime rejection records zero actual. Unknown bodies/codes, disconn
 timeout or malformed output retain estimate as ambiguous. Accounting failure after
 successful inference explicitly says inference completed; never replay it.
 
-Caller tenant/principal/Work Context come from verified Hub identity. Core's one
+Caller tenant and principal come from verified Hub identity. Core's one
 UsageVia names the immediate acting server and its immediate Task, if any; opaque Tasks
 Core cannot represent reject before reservation. Earlier originating Task constraints
 remain in the signed SDK/Hub chain and are not relabeled under the immediate actor.

@@ -2,13 +2,13 @@
 
 These ignored Rust tests call the real Hub and model only when explicitly selected.
 Ordinary component tests use synthetic vectors. The operator prepares Artifact objects,
-credentials and network policy independently; the runner creates no users, Work Contexts
-or ACL grants and changes no production server API. Keep reports outside this repository.
+credentials and network policy independently; the runner creates no users, groups or ACL
+grants and changes no production server API. Keep reports outside this repository.
 
 Set `VEOVEO_EMBEDDING_ACCEPTANCE=1` and these `VEOVEO_ACCEPTANCE_` variables:
 `HUB` (verified HTTPS origin), `PROFILE` (default local), `DEVICE` (mps/cuda),
 `MEMBER_BEARER_ENV` (name of an existing environment variable holding the bearer),
-`PRINCIPAL`, `TENANT`, `WORK_CONTEXT`, `CASES_FILE`, and `REPORT` (new path in an existing
+`PRINCIPAL`, `TENANT`, `CASES_FILE`, and `REPORT` (new path in an existing
 directory). Optional `CA_FILE` supplies the admitted CA bundle; `BASELINE_REPORT` selects
 a previously passed corpus/capacity report; `READ_ONLY_BEARER_ENV` selects a pre-existing
 identity denied embedding permission. Bearers and signed transfers never enter reports.
@@ -109,13 +109,13 @@ provide a known existing Artifact outside the selected caller's actual read ACL:
 
 ```json
 {"artifactId": "<existing-restricted-id>", "owner": "<owner-principal-id>",
- "workContext": "<artifact-context-id>", "preparer": "<preparer-principal-id>",
+ "preparer": "<preparer-principal-id>",
  "evidenceSha256": "sha256:<owner-preparation-receipt-hash>",
  "callerHasNoReadAccess": true}
 ```
 
-Different ownership in the same Work Context
-is insufficient because membership grants access. A random missing ID or unavailable
+The owner must share it with no grant the caller holds, directly or through one of the
+caller's groups, since a group grant gives access. A random missing ID or unavailable
 metadata does not prove ACL denial. The runner checks native Artifact read refusal and
 closed embedding resolution refusal, then requires unchanged own usage (no reservation).
 External preparation evidence proves existence/ACL setup; these observed refusals alone

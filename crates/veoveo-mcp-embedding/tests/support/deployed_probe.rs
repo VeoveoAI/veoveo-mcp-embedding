@@ -115,6 +115,8 @@ impl ProbeConfig {
                     .map_err(|_| anyhow!("invalid probe endpoint"))?,
             )
             .map_err(|_| anyhow!("invalid probe endpoint"))?,
+            // The probe serves MCP alone.
+            surfaces: None,
         };
         let key =
             ServerKeyPair::generate().map_err(|_| anyhow!("native probe key generation failed"))?;

@@ -136,7 +136,6 @@ fn download(id: ArtifactId) -> CreateDownloadResult {
             media_type: artifact::MediaType::parse("image/png").unwrap(),
             size: Some(artifact::ObjectSize::new(3).unwrap()),
             owner: principal.id.clone(),
-            work_context: testing::authority().work_context,
             labels: Default::default(),
             release_state: artifact::ReleaseState::Private,
             state: artifact::ArtifactState::Available,

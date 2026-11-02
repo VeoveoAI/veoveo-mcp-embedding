@@ -9,14 +9,13 @@ use veoveo_mcp_embedding::{
 };
 mod support;
 use support::{output, request};
-use veoveo_types::{PrincipalId, TenantId, WorkContextId};
+use veoveo_types::{PrincipalId, TenantId};
 use veoveo_usage::{UsageActor, UsagePhase};
 
 fn actor() -> UsageActor {
     UsageActor {
         tenant: TenantId::parse("tenant-a").unwrap(),
         principal: PrincipalId::parse("https://idp.example.com#user-1").unwrap(),
-        work_context: WorkContextId::parse("mission").unwrap(),
     }
 }
 struct Synthetic {
