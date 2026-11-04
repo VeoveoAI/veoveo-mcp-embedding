@@ -4,7 +4,7 @@
 - The design is in [crates/veoveo-mcp-embedding/DESIGN.md](crates/veoveo-mcp-embedding/DESIGN.md). Change it in the same change as the code.
 - Work only in the assigned worktree; preserve concurrent work. The coordinator owns architecture and rollout, the builder owns full checks/builds/deployments. No subagents or model-provider calls during iteration.
 - Pin dependencies to reviewed revisions. Keep the `contract` feature free of runtime/network/database dependencies.
-- Generate embeddings only. No Knowledge adaptation, vector storage/search, pgvector, compatibility migrations or extra orchestration.
+- Generate embeddings only; no vector storage, search or pgvector here, and no compatibility migrations or extra orchestration. The `client` feature implements the SDK's `Embedder` so knowledge sources call this server.
 - Use ready typed SDK routes, normal Hub registration/identity and native Core usage APIs. No handwritten MCP hosting or queries into Core tables.
 - Never persist or log text, vectors, provider credentials or arbitrary upstream bodies. No automatic inference replay, redirects or CPU/FP16 fallback.
 - Keep test logic in Rust; synthetic provider tests must be labelled synthetic. Run the deterministic Docker check on Mac and Linux as assigned; real GPU qualification is a separate gate.

@@ -196,33 +196,16 @@ pub fn validate_result(
     request: &RuntimeRequest,
     device: &Device,
 ) -> Result<(), RuntimeError> {
-    let sources: Vec<Vec<_>> = request
-        .items
-        .iter()
-        .map(|item| {
-            item.content
-                .iter()
-                .enumerate()
-                .filter_map(|(index, part)| part.source().map(|source| (index, source.identity())))
-                .collect()
-        })
-        .collect();
-    validate_public_result(
-        value,
-        request.request_id,
-        &request.public(),
-        &sources,
-        device,
-    )
+    validate_public_result(value, request.request_id, &request.shape(), device)
 }
 
-/// Validate public output against exact public input and caller-authorized safe
-/// Artifact identities. Useful for replay-free receipt validation, without grants.
+/// Validate public output against the exact request shape: its text, each media part's
+/// position, modality, media type and size, and its options. A saved receipt validates
+/// without any signed GET.
 pub fn validate_public_result(
     value: &EmbeddingResult,
     request_id: uuid::Uuid,
-    request: &EmbedRequest,
-    sources: &[Vec<(usize, MediaSource)>],
+    request: &RequestShape,
     device: &Device,
 ) -> Result<(), RuntimeError> {
     request.validate().map_err(|_| valid())?;
@@ -234,7 +217,6 @@ pub fn validate_public_result(
         || &value.execution.device != device
         || value.execution.dtype != "float32"
         || value.items.len() != request.items.len()
-        || sources.len() != request.items.len()
         || value.processing_id != request.processing_id().map_err(|_| valid())?
         || value.processing != request.effective_processing()
     {
@@ -261,39 +243,23 @@ pub fn validate_public_result(
             return Err(valid());
         }
         tokens = tokens.checked_add(item.token_count).ok_or_else(valid)?;
+        // Each media part, by its position in the item, and what it states.
         let expected: Vec<_> = input
             .content
             .iter()
             .enumerate()
-            .filter_map(|(i, part)| part.artifact_id().map(|id| (i, part.modality(), id)))
+            .filter_map(|(i, part)| part.source().map(|source| (i, part.modality(), source)))
             .collect();
-        if expected.len() != item.media.len() || sources[index].len() != expected.len() {
+        if expected.len() != item.media.len() {
             return Err(valid());
         }
-        for (((part_index, kind, id), (source_index, source)), row) in
-            expected.into_iter().zip(&sources[index]).zip(&item.media)
-        {
+        for ((part_index, kind, source), row) in expected.into_iter().zip(&item.media) {
             let observed = match row {
                 MediaCoverage::Image { .. } => Modality::Image,
                 MediaCoverage::Audio { .. } => Modality::Audio,
                 MediaCoverage::Video { .. } => Modality::Video,
             };
-            if row.part_index() != part_index
-                || kind != observed
-                || *source_index != part_index
-                || source.artifact_id != id
-                || row.source() != source
-            {
-                return Err(valid());
-            }
-            let mime = source.media_type.as_str();
-            let family = match kind {
-                Modality::Image => mime.starts_with("image/"),
-                Modality::Audio => mime.starts_with("audio/") || mime.starts_with("video/"),
-                Modality::Video => mime.starts_with("video/"),
-                Modality::Text => false,
-            };
-            if !family || source.size.bytes() == 0 || source.size.bytes() > MAX_ARTIFACT_BYTES {
+            if row.part_index() != part_index || kind != observed || row.source() != source {
                 return Err(valid());
             }
             source_bytes = source_bytes

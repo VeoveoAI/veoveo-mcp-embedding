@@ -1,22 +1,48 @@
-//! Private runtime wire types. Signed transfers are never part of public discovery.
+//! Private runtime wire types. A media part's signed GET is the caller's credential: it is
+//! never part of public output, and every type here redacts it in Debug output.
 use crate::contract::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use veoveo_mcp_artifact::contract::SignedTransfer;
 use veoveo_types::Sha256Digest;
 
+/// The caller's signed GET of one media part: the URL and the headers its signature binds,
+/// which the runtime sends unchanged.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SignedGet {
+    pub url: SignedUrl,
+    #[serde(default, skip_serializing_if = "MediaHeaders::is_empty")]
+    pub headers: MediaHeaders,
+}
+impl std::fmt::Debug for SignedGet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SignedGet([REDACTED])")
+    }
+}
+
+/// One media part as the runtime fetches it: the stated media type and size and the
+/// caller's signed GET. There is no identity of the media's holder.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeSource {
-    pub artifact_id: ArtifactId,
-    pub media_type: veoveo_mcp_artifact::contract::MediaType,
-    pub size: veoveo_mcp_artifact::contract::ObjectSize,
-    pub get: SignedTransfer,
+    pub media_type: MediaType,
+    pub size: MediaSize,
+    pub get: SignedGet,
 }
 impl RuntimeSource {
+    pub fn of(media: &SignedMedia) -> Self {
+        Self {
+            media_type: media.media_type.clone(),
+            size: media.size,
+            get: SignedGet {
+                url: media.url.clone(),
+                headers: media.headers.clone(),
+            },
+        }
+    }
+    /// What the part states, without its signed GET.
     pub fn identity(&self) -> MediaSource {
         MediaSource {
-            artifact_id: self.artifact_id,
             media_type: self.media_type.clone(),
             size: self.size,
         }
@@ -25,7 +51,8 @@ impl RuntimeSource {
 impl std::fmt::Debug for RuntimeSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RuntimeSource")
-            .field("artifact_id", &self.artifact_id)
+            .field("media_type", &self.media_type)
+            .field("size", &self.size)
             .finish_non_exhaustive()
     }
 }
@@ -38,6 +65,21 @@ pub enum RuntimePart {
     Video { source: RuntimeSource },
 }
 impl RuntimePart {
+    /// The runtime's form of a public part.
+    pub fn of(part: &ContentPart) -> Self {
+        match part {
+            ContentPart::Text { text } => Self::Text { text: text.clone() },
+            ContentPart::Image(media) => Self::Image {
+                source: RuntimeSource::of(media),
+            },
+            ContentPart::Audio(media) => Self::Audio {
+                source: RuntimeSource::of(media),
+            },
+            ContentPart::Video(media) => Self::Video {
+                source: RuntimeSource::of(media),
+            },
+        }
+    }
     pub fn source(&self) -> Option<&RuntimeSource> {
         match self {
             Self::Text { .. } => None,
@@ -54,18 +96,12 @@ impl RuntimePart {
             Self::Video { .. } => Modality::Video,
         }
     }
-    fn public(&self) -> ContentPart {
+    fn shape(&self) -> PartShape {
         match self {
-            Self::Text { text } => ContentPart::Text { text: text.clone() },
-            Self::Image { source } => ContentPart::Image {
-                artifact_id: source.artifact_id,
-            },
-            Self::Audio { source } => ContentPart::Audio {
-                artifact_id: source.artifact_id,
-            },
-            Self::Video { source } => ContentPart::Video {
-                artifact_id: source.artifact_id,
-            },
+            Self::Text { text } => PartShape::Text { text: text.clone() },
+            Self::Image { source } => PartShape::Image(source.identity()),
+            Self::Audio { source } => PartShape::Audio(source.identity()),
+            Self::Video { source } => PartShape::Video(source.identity()),
         }
     }
 }
@@ -94,7 +130,27 @@ impl std::fmt::Debug for RuntimeRequest {
     }
 }
 impl RuntimeRequest {
-    pub fn new(request_id: uuid::Uuid, input: &EmbedRequest, items: Vec<RuntimeItem>) -> Self {
+    /// The runtime's form of `input`: its parts in order, each media part with the
+    /// caller's signed GET.
+    pub fn new(request_id: uuid::Uuid, input: &EmbedRequest) -> Self {
+        Self::from_items(
+            request_id,
+            input,
+            input
+                .items
+                .iter()
+                .map(|item| RuntimeItem {
+                    content: item.content.iter().map(RuntimePart::of).collect(),
+                })
+                .collect(),
+        )
+    }
+    /// `input`'s options with explicitly given runtime items.
+    pub fn from_items(
+        request_id: uuid::Uuid,
+        input: &EmbedRequest,
+        items: Vec<RuntimeItem>,
+    ) -> Self {
         Self {
             request_id,
             items,
@@ -104,13 +160,14 @@ impl RuntimeRequest {
             preprocessing: input.preprocessing.effective(),
         }
     }
-    pub fn public(&self) -> EmbedRequest {
-        EmbedRequest {
+    /// The request as its result is validated against it, without signed GETs.
+    pub fn shape(&self) -> RequestShape {
+        RequestShape {
             items: self
                 .items
                 .iter()
-                .map(|item| EmbeddingInput {
-                    content: item.content.iter().map(RuntimePart::public).collect(),
+                .map(|item| ShapeItem {
+                    content: item.content.iter().map(RuntimePart::shape).collect(),
                 })
                 .collect(),
             dimensions: self.dimensions,
@@ -125,29 +182,12 @@ impl RuntimeRequest {
             .unwrap_or_else(|| self.prompt_name.map_or("", PromptName::prefix))
     }
     pub fn validate(&self) -> Result<(), &'static str> {
-        self.public().validate()?;
+        self.shape().validate()?;
         if self.request_id.get_version_num() != 7 {
             return Err("request identity must be UUIDv7");
         }
-        let mut bytes = 0_u64;
-        for source in self
-            .items
-            .iter()
-            .flat_map(|item| &item.content)
-            .filter_map(RuntimePart::source)
-        {
-            if source.size.bytes() == 0 || source.size.bytes() > MAX_ARTIFACT_BYTES {
-                return Err("artifact size exceeds service bounds");
-            }
-            bytes = bytes
-                .checked_add(source.size.bytes())
-                .ok_or("artifact size overflow")?;
-        }
-        if bytes > MAX_TRANSFER_BYTES {
-            return Err("aggregate artifact bytes exceed service bounds");
-        }
-        // Authorized signed headers/URLs can expand far beyond public input bytes.
-        // Check the actual private serialization before reserving inference usage.
+        // Signed headers/URLs can expand far beyond public text bytes. Check the actual
+        // private serialization before reserving inference usage.
         if serde_json::to_vec(self)
             .map_err(|_| "private payload serialization failed")?
             .len()
@@ -176,8 +216,27 @@ impl RuntimeRequest {
         }
     }
 }
-// Pure validation provenance also works with saved public inputs and authorized
-// safe source identities: no fake/persisted transfer is needed for acceptance.
+// Pure validation provenance also works with a saved request shape: no signed GET is
+// needed, faked or kept for acceptance.
+impl RequestShape {
+    pub fn processing_descriptor(&self) -> ProcessingDescriptor<'_> {
+        descriptor(
+            self.dimensions,
+            self.effective_prompt(),
+            &self.preprocessing,
+        )
+    }
+    pub fn processing_id(&self) -> Result<Sha256Digest, serde_json::Error> {
+        serde_json_canonicalizer::to_vec(&self.processing_descriptor()).map(|bytes| digest(&bytes))
+    }
+    pub fn effective_processing(&self) -> EffectiveProcessing {
+        EffectiveProcessing {
+            prompt_name: self.prompt_name,
+            prompt_sha256: digest(self.effective_prompt().as_bytes()),
+            preprocessing: self.preprocessing.effective(),
+        }
+    }
+}
 impl EmbedRequest {
     pub fn processing_descriptor(&self) -> ProcessingDescriptor<'_> {
         descriptor(

@@ -1,7 +1,11 @@
 //! Public ordered input and audited request-wide native processing controls.
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
-pub use veoveo_mcp_artifact::contract::ArtifactId;
+/// An item's parts are the SDK's knowledge parts: text, or media a caller signed.
+pub use veoveo_hub_sdk::knowledge::{
+    ContentPart, ContentParts, HeaderName, HeaderValue, MediaHeaders, MediaSize, MediaType,
+    Modality, SignedMedia, SignedUrl,
+};
 
 use super::*;
 
@@ -81,58 +85,13 @@ impl PromptName {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum Modality {
-    Text,
-    Image,
-    Audio,
-    Video,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
-pub enum ContentPart {
-    Text {
-        text: String,
-    },
-    Image {
-        #[serde(rename = "artifactId")]
-        artifact_id: ArtifactId,
-    },
-    Audio {
-        #[serde(rename = "artifactId")]
-        artifact_id: ArtifactId,
-    },
-    Video {
-        #[serde(rename = "artifactId")]
-        artifact_id: ArtifactId,
-    },
-}
-impl ContentPart {
-    pub fn modality(&self) -> Modality {
-        match self {
-            Self::Text { .. } => Modality::Text,
-            Self::Image { .. } => Modality::Image,
-            Self::Audio { .. } => Modality::Audio,
-            Self::Video { .. } => Modality::Video,
-        }
-    }
-    pub fn artifact_id(&self) -> Option<ArtifactId> {
-        match self {
-            Self::Text { .. } => None,
-            Self::Image { artifact_id }
-            | Self::Audio { artifact_id }
-            | Self::Video { artifact_id } => Some(*artifact_id),
-        }
-    }
-}
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EmbeddingInput {
-    /// Ordered parts jointly embedded into one vector. Repeated modalities are allowed.
-    #[schemars(length(min = 1, max = 16))]
-    pub content: Vec<ContentPart>,
+    /// 1 to 16 ordered parts jointly embedded into one vector: text, or an image, audio or
+    /// video with its signed GET URL, headers, media type and size. Repeated modalities are
+    /// allowed.
+    pub content: ContentParts,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -293,49 +252,29 @@ impl EmbedRequest {
             .as_deref()
             .unwrap_or_else(|| self.prompt_name.map_or("", PromptName::prefix))
     }
+    /// Checks the request against the service bounds: the batch, its text and the media
+    /// sizes the parts state. Returns the request's text bytes.
     pub fn validate(&self) -> Result<usize, &'static str> {
-        self.preprocessing.validate()?;
-        if self.prompt.is_some() && self.prompt_name.is_some() {
-            return Err("prompt and promptName are mutually exclusive");
+        self.shape().validate()
+    }
+    /// The request as its result is validated against it, without signed URLs or headers.
+    pub fn shape(&self) -> RequestShape {
+        RequestShape {
+            items: self
+                .items
+                .iter()
+                .map(|item| ShapeItem {
+                    content: item.content.iter().map(PartShape::of).collect(),
+                })
+                .collect(),
+            dimensions: self.dimensions,
+            prompt_name: self.prompt_name,
+            prompt: self.prompt.clone(),
+            preprocessing: self.preprocessing.clone(),
         }
-        if self.items.is_empty() || self.items.len() > MAX_ITEMS {
-            return Err("batch must contain 1 to 8 items");
-        }
-        let mut bytes = self.effective_prompt().len();
-        let mut parts = 0;
-        let mut has_audio = false;
-        if reserved(self.effective_prompt()) {
-            return Err("media placeholders are reserved for ordered content parts");
-        }
-        for item in &self.items {
-            if item.content.is_empty() || item.content.len() > MAX_PARTS_PER_ITEM {
-                return Err("item must contain 1 to 16 ordered parts");
-            }
-            parts += item.content.len();
-            for part in &item.content {
-                if let ContentPart::Text { text } = part {
-                    if text.trim().is_empty() || reserved(text) {
-                        return Err(
-                            "text must be nonblank and contain no reserved media placeholders",
-                        );
-                    }
-                    bytes = bytes
-                        .checked_add(text.len())
-                        .ok_or("content size overflow")?;
-                }
-                has_audio |= matches!(part, ContentPart::Audio { .. });
-            }
-        }
-        if parts > MAX_PARTS || bytes > MAX_CONTENT_BYTES {
-            return Err("batch content exceeds service bounds");
-        }
-        if has_audio && self.preprocessing.video.load_audio_from_video {
-            return Err("video soundtrack inclusion cannot be combined with separate audio parts");
-        }
-        Ok(bytes)
     }
 }
-fn reserved(value: &str) -> bool {
+pub(super) fn reserved(value: &str) -> bool {
     ["<|image|>", "<|audio|>", "<|video|>"]
         .iter()
         .any(|marker| value.contains(marker))

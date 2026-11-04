@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use veoveo_hub_sdk::{
     PublicDeployment, TelemetryGuard,
-    hosting::{Hosted, HostedServer, ServerCalls},
+    hosting::{Hosted, HostedServer},
     init_server_telemetry,
     registration::client::Registration,
 };
@@ -43,14 +43,14 @@ pub async fn run() -> Result<()> {
     }
     let _telemetry: TelemetryGuard =
         init_server_telemetry("veoveo-mcp-embedding", "info,veoveo_mcp_embedding=debug")?;
-    let (client, registration, http, calls) = registration::register(&args, declaration).await?;
+    let (client, registration, http) = registration::register(&args, declaration).await?;
     // Process stop preserves native registration for resume; retirement is explicit.
     // The Hub retains its existing orphan grace.
     let issued = registration.clone();
     let mut served = None;
     let maintained = client
         .maintain(registration, async {
-            served = Some(serve(&args, &deployment, &issued, http, calls).await);
+            served = Some(serve(&args, &deployment, &issued, http).await);
         })
         .await;
     if let Err(error) = maintained {
@@ -66,7 +66,6 @@ async fn serve(
     deployment: &PublicDeployment,
     registration: &Registration,
     http: reqwest::Client,
-    calls: ServerCalls,
 ) -> Result<()> {
     let grant = registration
         .database()
@@ -117,7 +116,6 @@ async fn serve(
         .deployment(deployment, args.allow_loopback_hosts)?
         .allowed_hosts(args.allowed_hosts.iter().cloned())
         .internal_trust(registration.access_tokens(), http)?
-        .calls(calls)
         .handler(move || Hosted::new(domain.clone()))
         .mcp_request_limit(MAX_JSON_BYTES)
         .request_timeout(std::time::Duration::from_secs(65))

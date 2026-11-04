@@ -2,10 +2,12 @@
 mod input;
 mod permissions;
 mod resource;
+mod shape;
 mod types;
 pub use input::*;
 pub use permissions::*;
 pub use resource::*;
+pub use shape::*;
 pub use types::*;
 use veoveo_hub_sdk::calls::ProviderContract;
 pub struct EmbeddingProvider;

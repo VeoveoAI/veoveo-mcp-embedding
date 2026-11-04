@@ -1,16 +1,23 @@
 # Multimodal embedding generation
 
-This service owns typed MCP discovery, native caller-bound Artifact authorization and
-Core usage. The private runtime owns bounded media transfer/decoding and the full
-pinned GPU model. No vector storage, search, Knowledge integration, custom
-sampler, clipping/chunking/aggregation, model choice or compatibility route is added.
+This service owns typed MCP discovery, permissions and Core usage. The private runtime
+owns bounded media transfer/decoding and the full pinned GPU model. Media arrives as the
+caller's signed GET: whoever holds the media, such as Artifact, decided access when it
+signed it, so Embedding authorizes no media and calls no other server. No vector
+storage, search, pgvector, custom sampler, clipping/chunking/aggregation, model choice or
+compatibility route is added. The `client` feature implements the SDK's `Embedder`, so a
+knowledge source embeds through this server.
 
 ## Public ordered API
 
 `embed` requires `embedding.embeddings.create`; capabilities/docs require
 `embedding.models.read`. Ready SDK routes own discovery, authorization and dispatch.
-The contract-only feature contains no network, database or model runtime dependencies;
-media IDs reuse Artifact's contract type.
+The contract-only feature contains no network, database or model runtime dependencies,
+and no Artifact crate. An item's parts are the SDK's knowledge `ContentPart`s, 1 to 16
+per item: text, or an image, audio or video carrying the SDK's `SignedMedia` beside its
+`type`: the signed `url`, the `headers` its signature binds, `mediaType` and `size` in
+bytes. A media part's type is of its kind (an image `image/*`, a video `video/*`, audio
+`audio/*` or a video's soundtrack, `video/*`), which the SDK admits on decoding.
 
 ```json
 {
@@ -18,12 +25,17 @@ media IDs reuse Artifact's contract type.
     {"content": [{"type": "text", "text": "hello again"}]},
     {"content": [
       {"type": "text", "text": "A product demonstration"},
-      {"type": "video", "artifactId": "<available-video-artifact-id>"}
+      {"type": "video", "url": "<signed GET URL>", "mediaType": "video/mp4", "size": 7340032}
     ]}
   ],
   "dimensions": 256
 }
 ```
+
+A caller that embeds an Artifact first calls `artifact__create_download` and passes the
+URL, its headers, the media type and the size it answers. A signed GET lives five
+minutes, so a caller signs right before each call. The URL and headers are the caller's
+credential: Embedding passes them only to its private runtime and never echoes them.
 
 For the two-item request above, the result contains two rows (the ellipses below
 are illustrative and are not valid JSON):
@@ -65,7 +77,8 @@ claim is made. Sampling/truncation coverage is returned; application clip extrac
 long-media chunking or aggregation would be separate proposed pre/postprocessing.
 
 Initial Veoveo service bounds are 8 items, 16 parts/item, 32 parts/batch, 64 KiB total UTF-8
-text/prompt, 64 MiB/source and 128 MiB aggregate transfer; 16 MP/image or frame and 64 MP
+text/prompt, 64 MiB/source and 128 MiB aggregate transfer, both checked on the caller's
+stated `size` before any transfer and again on the actual bytes by the runtime; 16 MP/image or frame and 64 MP
 aggregate selected pixels; 300 seconds/source and 600 seconds aggregate decoded audio; video fps ≤ 120
 and maxFrames ≤ 256. These are defensive limits, not Google capability or
 semantic-quality guarantees. Actual native tokens
@@ -80,30 +93,27 @@ answer and the limits, naming the tool as callers see it, `embedding__embed`. Th
 server's `instructions` say what it is and name the skill's address. The skill file is a
 resource of the server under its document policy, `embedding.models.read`.
 
-## Artifact and private runtime boundary
+## Signed media and private runtime boundary
 
-The service declares Artifact read use. Native ServerCalls are configured from the
-same registration key/metadata/HTTP client; handlers use `ctx.client()` and typed
-CreateDownloadRequest through the Hub. Artifact owns ACL and immutable availability.
-MCP requires the exact requested ID, Available state, known positive bounded size,
-the matching MIME family (audio also accepts video containers), and a live GET.
-It checks aggregate sizes before any runtime dispatch. No bulk bytes pass through MCP.
-ArtifactID and create-only storage identify the object; consumers own any content
-fingerprint independently of Artifact metadata.
+Embedding declares no use of another server and holds no media authority. The holder
+of the media decided access when it signed the GET; Embedding checks the part's media
+type family and the stated size bounds, then hands the signed GET to its runtime. No
+bulk bytes pass through MCP, and a request that names media Embedding cannot fetch
+fails at the runtime as a closed `source_*` rejection with zero actual usage.
 
-The private server-only DTO replaces Artifact references with their authorized
-identity/mediaType/size plus Artifact's actual typed SignedTransfer. Empty
-headers may be omitted. URLs/headers never enter public schemas, results, errors,
-Debug output or logs. Private serialized payload also must fit 512 KiB; public text
-bounds alone do not constrain signed-header expansion. Runtime independently enforces
-its configured storage origin, no redirects/proxies, elapsed deadline, exact raw byte size
-and native decoded bounds. Size-checked temporary files remain owned by its actual worker.
-Metadata validation and repeated bounded native decodes are explicit runtime costs.
+The private server-only DTO carries each media part's `mediaType`, `size` and the
+caller's signed GET, `{url, headers}`; empty headers are omitted. There is no
+Artifact identity. URLs/headers appear in the public input schema, which must carry
+them, and nowhere else: never in output schemas, results, errors, Debug output or
+logs. Private serialized payload also must fit 512 KiB, as must the public request.
+Runtime independently enforces its configured storage origin, no redirects/proxies,
+elapsed deadline, exact raw byte size against the stated size and native decoded
+bounds; storage refusing an expired or tampered signature is `source_refused`.
+Size-checked temporary files remain owned by its actual worker. Metadata validation
+and repeated bounded native decodes are explicit runtime costs.
 
-All references resolve before inference usage reservation. Text-only requests require
-no Artifact call. One 60-second deadline covers resolution and generation; failed/denied or
-timed-out resolution reports not_started with no inference usage reservation. Once
-generation begins, timeout conservatively reports execution/accounting may be incomplete.
+One 60-second deadline covers the call. Once generation begins, timeout
+conservatively reports execution/accounting may be incomplete.
 One runtime GPU slot remains owned until actual work finishes, even after disconnect;
 there is no retry, queue, kernel-cancellation guarantee or durable embedding Task.
 
@@ -129,14 +139,17 @@ numeric cases prove canonical byte/hash parity; ordinary sorted JSON is insuffic
 Input content is excluded except explicit effective prompt; custom prompt is not echoed,
 only its digest and optional canonical name.
 
-Closed image/audio/video coverage must correspond to each exact ordered media part and
-authorized safe source identity. Pixel/duration/frame/sample bounds, native option effects,
+Closed image/audio/video coverage identifies each media part by its position, the
+item's `index` and its `partIndex`, with the `source` the caller stated, `mediaType`
+and `size`; no URL or Artifact identity. Each row must match the exact ordered media
+part at that position. Pixel/duration/frame/sample bounds, native option effects,
 truncation/retained samples and soundtrack presence are checked. Native repeated frame
 indices are valid: order is nondecreasing, not unique. Model prompt timestamps equal
 index/sourceFPS; actual codec PTS are separate and can have source timeline offsets.
 Validation does not reimplement Google's sampler or independently infer semantics from
-pixels. Typed public result validation can use safe source identities for saved receipts,
-without constructing fake grants or retaining signed URLs.
+pixels. Typed public result validation works on a `RequestShape`, the request without
+its signed URLs and headers: each part's text, or its modality, media type and size, and
+the request-wide options. Saved receipts keep the shape, never a signed URL.
 
 ## Accounting and native composition
 
@@ -153,22 +166,42 @@ Core cannot represent reject before reservation. Earlier originating Task constr
 remain in the signed SDK/Hub chain and are not relabeled under the immediate actor.
 Full actor history is Hub/SDK provenance, beyond Core's single-via usage record.
 
+## Embedder
+
+The `client` feature, the contract plus the SDK's `client`, holds `EmbeddingClient`,
+which implements the SDK's knowledge `Embedder`: `embed(client, items, purpose)` calls
+the typed `embed` tool through the caller-bound `HubClient` the knowledge source
+already holds, so the caller embeds and the usage is theirs. `EmbeddingPurpose::Document`
+uses promptName `Document`, `Query` uses `SearchQuery`, both at 768 dimensions with
+default preprocessing. The items must fit one request's bounds; the client refuses
+items that do not before calling. It returns `Embeddings` whose model is the checkpoint
+the result reports, `{id}@{revision}`, and its dimensions, one vector per item in order,
+and refuses a result whose cardinality or order differs. The `server` feature includes
+`client`, so the server's tests exercise it.
+
 ## Verification
 
-Component tests use explicitly synthetic vectors/media metadata and a simulated
-Artifact grant/denial handler. Native SDK Mesh tests prove direct/composed delegation,
-permission checks, ordered resolution and no runtime/usage on refusal; they do not
-prove actual Artifact SQL ACL or real inference. No content is persisted here.
+Component tests use explicitly synthetic vectors, media metadata and signed URLs.
+Native SDK Mesh tests prove direct and composed calls, permission checks, bounds on the
+stated media size and media-type family before any runtime or usage, that the runtime
+DTO carries the signed GET without an Artifact identity, that coverage maps by position,
+and that a signed URL never reaches results, errors, Debug output or logs. An
+`Embedder` test calls through a probe server's caller-bound client to a synthetic
+runtime. None of them proves real inference or media validity. No content is persisted
+here.
 
-The ignored acceptance runner consumes a new external corpus/capacity manifest with
-public inputs, independently checked fixture bytes/hash/recipes, optional expected tokens and explicit
-ranking expectations. It reserves a new report, validates offline input/baseline before
-live entry, obtains typed signed downloads and independently fingerprints bounded
-fixture bytes in the test caller, makes serial native embedding calls, validates whole outputs and exact own-usage deltas, and records timings,
-request IDs, output identities and compact structured-result byte hashes. Own daily
-usage does not establish full request/delegation attribution. Cross-device parity
-requires matching processing and source bytes, even if Artifact IDs differ. An external retained Python
-wire fixture can exercise the Rust producer/consumer boundary without another model call.
+The ignored acceptance runner consumes a new external corpus/capacity manifest whose
+media parts name fixture Artifacts, with independently checked fixture bytes/hash/recipes,
+optional expected tokens and explicit ranking expectations. It reserves a new report,
+validates offline input/baseline before live entry, then, as the caller, signs each
+fixture's download through `artifact__create_download`, independently fingerprints the
+bounded bytes, and passes the signed media to serial native embedding calls. It validates
+whole outputs and exact own-usage deltas, and records timings, request IDs, request
+shapes, output identities and compact structured-result byte hashes; signed URLs never
+enter receipts. Own daily usage does not establish full request/delegation attribution.
+Cross-device parity requires matching processing and source bytes, even if Artifact IDs
+differ. An external retained Python wire fixture can exercise the Rust
+producer/consumer boundary without another model call.
 
 
 Media coverage deserialization preserves native JSON decimal values through a closed
@@ -177,5 +210,4 @@ tagged buffering interaction with the shared arbitrary_precision feature; neithe
 alternate wire forms nor handwritten number conversion are accepted. Tests cover raw
 JSON and the SDK's structuredContent Value path, including actual retained Python output.
 See [acceptance inputs](tests/ACCEPTANCE.md) for the opt-in manifest and temporary native
-caller lifecycle. Deployed ACL denial is exercised only with an externally confirmed
-existing object outside the caller's actual ACL; otherwise it is explicitly not exercised.
+caller lifecycle. Artifact ACL denial is Artifact's, at signing, and is qualified there.

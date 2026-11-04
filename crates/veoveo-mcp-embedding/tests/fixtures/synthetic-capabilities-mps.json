@@ -91,7 +91,7 @@
     "maxContentBytes": 65536,
     "maxItemTokens": 8192,
     "maxBatchTokens": 16384,
-    "maxArtifactBytes": 67108864,
+    "maxSourceBytes": 67108864,
     "maxTransferBytes": 134217728,
     "maxPixels": 16000000,
     "maxTotalPixels": 64000000,

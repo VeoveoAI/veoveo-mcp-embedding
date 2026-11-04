@@ -267,19 +267,22 @@ async fn bounded_json<T: DeserializeOwned>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{RuntimeItem, RuntimePart};
     fn synthetic_request(text: &str) -> RuntimeRequest {
         let input: EmbedRequest = serde_json::from_value(
             serde_json::json!({"items":[{"content":[{"type":"text","text":text}]}]}),
         )
         .unwrap();
-        RuntimeRequest::new(
-            uuid::Uuid::now_v7(),
-            &input,
-            vec![RuntimeItem {
-                content: vec![RuntimePart::Text { text: text.into() }],
-            }],
-        )
+        RuntimeRequest::new(uuid::Uuid::now_v7(), &input)
+    }
+    /// A request whose image is synthetic signed media: no object stands behind its URL.
+    fn synthetic_media_request(text: &str) -> RuntimeRequest {
+        let input: EmbedRequest = serde_json::from_value(serde_json::json!({"items":[{"content":[
+            {"type":"text","text":text},
+            {"type":"image","url":"https://storage.test/object?X-Amz-Signature=synthetic-private-signature",
+             "headers":{"x-amz-security-token":"synthetic-private-header"},"mediaType":"image/png","size":3}
+        ]}]}))
+        .unwrap();
+        RuntimeRequest::new(uuid::Uuid::now_v7(), &input)
     }
     fn synthetic_output(request: &RuntimeRequest, capabilities: &Capabilities) -> EmbeddingResult {
         let mut vector = vec![0.0; usize::from(request.dimensions)];
@@ -348,8 +351,9 @@ mod tests {
     #[tokio::test]
     async fn diagnostics_classify_transport_body_and_status_without_private_data() {
         let _ = rustls::crypto::ring::default_provider().install_default();
-        // All payloads/credentials below are synthetic; no model or native provider.
-        let request = synthetic_request("synthetic-private-input");
+        // All payloads/credentials below are synthetic; no model or native provider. The
+        // request's signed media must not reach a diagnostic.
+        let request = synthetic_media_request("synthetic-private-input");
         let capture = Diagnostics::default();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let origin = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
@@ -423,9 +427,19 @@ mod tests {
             assert!(fields.keys().all(|name| allowed.contains(&name.as_str())));
             for value in fields.values() {
                 assert!(!value.contains("synthetic-private"));
-                assert!(!value.contains("http://"));
+                assert!(!value.contains("http://") && !value.contains("https://"));
                 assert!(!value.contains("127.0.0.1"));
+                assert!(!value.contains("X-Amz-Signature"));
             }
+        }
+        // A refusal's error text names no part of the request either.
+        for error in [
+            RuntimeError::Ambiguous,
+            RuntimeError::InvalidResponse,
+            RuntimeError::NotStarted(RejectionCode::SourceRefused),
+        ] {
+            let text = format!("{error} {error:?}");
+            assert!(!text.contains("synthetic-private") && !text.contains("storage.test"));
         }
     }
 

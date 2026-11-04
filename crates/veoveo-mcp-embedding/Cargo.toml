@@ -21,12 +21,15 @@ contract = [
     "dep:uuid",
     "dep:veoveo-hub-sdk",
     "dep:veoveo-types",
-    "dep:veoveo-mcp-artifact",
     "dep:serde_json",
 ]
-# The hosted server: MCP through the SDK, native Core usage and the binary.
+# The SDK's knowledge Embedder over this server's typed embed tool, through a
+# caller-bound HubClient: what a knowledge source depends on to embed its records.
+client = ["contract", "veoveo-hub-sdk/client"]
+# The hosted server: MCP through the SDK, native Core usage and the binary. It includes
+# the client so the server's tests exercise it.
 server = [
-    "contract",
+    "client",
     "veoveo-hub-sdk/server",
     "dep:anyhow",
     "dep:clap",
@@ -65,7 +68,6 @@ thiserror = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true }
 veoveo-hub-sdk = { workspace = true, features = ["contract"], optional = true }
 veoveo-types = { workspace = true, optional = true }
-veoveo-mcp-artifact = { workspace = true, features = ["contract"], optional = true }
 
 anyhow = { workspace = true, optional = true }
 clap = { workspace = true, optional = true }
@@ -126,4 +128,8 @@ required-features = ["server"]
 
 [[test]]
 name = "composition"
+required-features = ["server"]
+
+[[test]]
+name = "embedder"
 required-features = ["server"]

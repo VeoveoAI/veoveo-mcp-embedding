@@ -1,4 +1,6 @@
 //! Bounded embedding generation through a private, authenticated GPU runtime.
+#[cfg(feature = "client")]
+pub mod client;
 #[cfg(feature = "contract")]
 pub mod contract;
 #[cfg(feature = "server")]
@@ -7,8 +9,6 @@ pub mod mcp;
 pub mod protocol;
 #[cfg(feature = "server")]
 pub mod provider;
-#[cfg(feature = "server")]
-pub mod resolution;
 #[cfg(feature = "server")]
 pub mod server;
 #[cfg(feature = "server")]

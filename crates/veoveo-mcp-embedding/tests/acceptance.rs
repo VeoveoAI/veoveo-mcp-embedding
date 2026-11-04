@@ -1,10 +1,11 @@
 //! Real deployed acceptance, ignored by default. No provider/model calls in ordinary checks.
 //! Native Hub/Artifact credentials come from existing environment selectors, never caller signing.
-//! VEOVEO_ACCEPTANCE_CASES_FILE is an offline closed manifest with public inputs,
-//! fixture recipes/identities, optional token expectations and bounded ranking checks.
-//! REPORT must be new; its parent and any baseline must already exist. Reserve and
-//! validate every offline input/baseline before any Hub request. Signed transfers are
-//! requested only by the test caller for bounded independent fixture fingerprints.
+//! VEOVEO_ACCEPTANCE_CASES_FILE is an offline closed manifest with public inputs whose media
+//! parts name fixture Artifacts, fixture recipes, optional token expectations and bounded
+//! ranking checks. REPORT must be new; its parent and any baseline must already exist.
+//! Reserve and validate every offline input/baseline before any Hub request. The test
+//! caller signs each fixture's download through `artifact__create_download`, checks a
+//! bounded independent fingerprint and passes the signed media to `embedding__embed`.
 //! Each test makes only its manifest's serial embed calls, with no automatic retry.
 //! Credentials, arbitrary private errors and signed storage URLs never enter receipts.
 #![cfg(feature = "server")]
@@ -16,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use std::{
+    collections::BTreeMap,
     future::Future,
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -23,10 +25,8 @@ use std::{
 use support::forwarder::Forward;
 use veoveo_hub_sdk::{
     client::{CallError, CatalogError, HubClient, StaticBearer},
+    hub::HubToolName,
     identity::HubProfileId,
-};
-use veoveo_mcp_artifact::contract::{
-    ArtifactState, CreateDownloadRequest, ReadArtifact, SignedTransfer, TransferMethod,
 };
 use veoveo_mcp_embedding::{
     contract::*,
@@ -396,17 +396,142 @@ struct Ranking {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct FixtureRecipe {
-    artifact_id: ArtifactId,
-    media_type: veoveo_mcp_artifact::contract::MediaType,
-    size: veoveo_mcp_artifact::contract::ObjectSize,
+    artifact_id: uuid::Uuid,
+    media_type: MediaType,
+    size: MediaSize,
     sha256: veoveo_types::Sha256Digest,
     recipe: String,
+}
+/// One part of a manifest's input: text, or media that names its fixture Artifact. The
+/// runner signs each fixture right before its call; a manifest holds no signed URL.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
+enum CasePart {
+    Text {
+        text: String,
+    },
+    Image {
+        #[serde(rename = "artifactId")]
+        artifact_id: uuid::Uuid,
+    },
+    Audio {
+        #[serde(rename = "artifactId")]
+        artifact_id: uuid::Uuid,
+    },
+    Video {
+        #[serde(rename = "artifactId")]
+        artifact_id: uuid::Uuid,
+    },
+}
+impl CasePart {
+    fn artifact(&self) -> Option<(Modality, uuid::Uuid)> {
+        match self {
+            Self::Text { .. } => None,
+            Self::Image { artifact_id } => Some((Modality::Image, *artifact_id)),
+            Self::Audio { artifact_id } => Some((Modality::Audio, *artifact_id)),
+            Self::Video { artifact_id } => Some((Modality::Video, *artifact_id)),
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CaseItem {
+    content: Vec<CasePart>,
+}
+/// A manifest's public input: an embed request whose media parts name fixtures.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CaseInput {
+    items: Vec<CaseItem>,
+    #[serde(default)]
+    dimensions: Dimensions,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prompt_name: Option<PromptName>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prompt: Option<String>,
+    #[serde(default)]
+    preprocessing: Preprocessing,
+}
+impl CaseInput {
+    fn artifacts(&self) -> impl Iterator<Item = uuid::Uuid> + '_ {
+        self.items
+            .iter()
+            .flat_map(|item| &item.content)
+            .filter_map(|part| part.artifact().map(|(_, id)| id))
+    }
+    /// The request shape, each fixture's stated media type and size in its part's place.
+    fn shape(&self, fixtures: &[FixtureRecipe]) -> Result<RequestShape> {
+        let mut items = Vec::with_capacity(self.items.len());
+        for item in &self.items {
+            let mut content = Vec::with_capacity(item.content.len());
+            for part in &item.content {
+                content.push(match part.artifact() {
+                    None => match part {
+                        CasePart::Text { text } => PartShape::Text { text: text.clone() },
+                        _ => unreachable!("only text names no artifact"),
+                    },
+                    Some((modality, id)) => {
+                        let recipe = fixtures
+                            .iter()
+                            .find(|fixture| fixture.artifact_id == id)
+                            .context("each media Artifact ID requires its exact source bytes/hash and fixture recipe")?;
+                        let source = MediaSource {
+                            media_type: recipe.media_type.clone(),
+                            size: recipe.size,
+                        };
+                        match modality {
+                            Modality::Image => PartShape::Image(source),
+                            Modality::Audio => PartShape::Audio(source),
+                            _ => PartShape::Video(source),
+                        }
+                    }
+                });
+            }
+            items.push(ShapeItem { content });
+        }
+        Ok(RequestShape {
+            items,
+            dimensions: self.dimensions,
+            prompt_name: self.prompt_name,
+            prompt: self.prompt.clone(),
+            preprocessing: self.preprocessing.clone(),
+        })
+    }
+    /// The embed request, each media part with its fixture's signed media.
+    fn request(&self, signed: &BTreeMap<uuid::Uuid, SignedMedia>) -> Result<EmbedRequest> {
+        let mut items = Vec::with_capacity(self.items.len());
+        for item in &self.items {
+            let mut content = Vec::with_capacity(item.content.len());
+            for part in &item.content {
+                content.push(match part {
+                    CasePart::Text { text } => ContentPart::text(text.clone()),
+                    _ => {
+                        let (modality, id) = part.artifact().context("a media part")?;
+                        let media = signed.get(&id).context("an unsigned fixture")?.clone();
+                        ContentPart::media(modality, media)
+                            .map_err(|_| anyhow!("a fixture's media type differs from its part"))?
+                    }
+                });
+            }
+            items.push(EmbeddingInput {
+                content: ContentParts::new(content)
+                    .map_err(|_| anyhow!("an item holds 1 to 16 parts"))?,
+            });
+        }
+        Ok(EmbedRequest {
+            items,
+            dimensions: self.dimensions,
+            prompt_name: self.prompt_name,
+            prompt: self.prompt.clone(),
+            preprocessing: self.preprocessing.clone(),
+        })
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Case {
     name: String,
-    input: EmbedRequest,
+    input: CaseInput,
     #[serde(default)]
     fixtures: Vec<FixtureRecipe>,
     #[serde(default)]
@@ -420,18 +545,14 @@ struct Manifest {
     kind: String,
     cases: Vec<Case>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct SourceEvidence {
-    part_index: usize,
-    source: MediaSource,
-}
+/// A validated observation: the case input with its fixture Artifacts, the request shape
+/// the output was validated against, and the output. It holds no signed URL.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Receipt {
     name: String,
-    input: EmbedRequest,
-    sources: Vec<Vec<SourceEvidence>>,
+    input: CaseInput,
+    shape: RequestShape,
     output: EmbeddingResult,
     output_bytes: usize,
     output_sha256: String,
@@ -474,6 +595,7 @@ fn validate_manifest(manifest: &Manifest) -> Result<()> {
             "invalid/repeated case name"
         );
         case.input
+            .shape(&case.fixtures)?
             .validate()
             .map_err(|_| anyhow!("invalid public acceptance input"))?;
         if let Some(tokens) = &case.expected_tokens {
@@ -504,44 +626,18 @@ fn validate_manifest(manifest: &Manifest) -> Result<()> {
             ensure!(
                 !fixture.recipe.is_empty()
                     && fixture.recipe.len() <= 8192
-                    && fixture.size.bytes() > 0
-                    && fixture.size.bytes() <= MAX_ARTIFACT_BYTES,
+                    && fixture.size.bytes() <= MAX_SOURCE_BYTES,
                 "invalid fixture recipe"
-            );
-        }
-        for id in case
-            .input
-            .items
-            .iter()
-            .flat_map(|item| &item.content)
-            .filter_map(ContentPart::artifact_id)
-        {
-            ensure!(
-                case.fixtures
-                    .iter()
-                    .any(|fixture| fixture.artifact_id == id),
-                "each media Artifact ID requires its exact source bytes/hash and fixture recipe"
             );
         }
     }
     Ok(())
 }
-fn source_rows(sources: &[Vec<SourceEvidence>]) -> Vec<Vec<(usize, MediaSource)>> {
-    sources
-        .iter()
-        .map(|rows| {
-            rows.iter()
-                .map(|row| (row.part_index, row.source.clone()))
-                .collect()
-        })
-        .collect()
-}
 fn validate_receipt(receipt: &Receipt) -> Result<()> {
     validate_public_result(
         &receipt.output,
         receipt.output.request_id,
-        &receipt.input,
-        &source_rows(&receipt.sources),
+        &receipt.shape,
         &receipt.output.execution.device,
     )?;
     let bytes = serde_json::to_vec(&receipt.output)?;
@@ -565,7 +661,7 @@ fn baseline(path: Option<&Path>, manifest: &Manifest) -> Result<Option<Vec<Recei
         validate_receipt(receipt)?;
         ensure!(receipt.name == case.name, "baseline case order differs");
         ensure!(
-            same_input(&receipt.input, &case.input),
+            same_shape(&receipt.shape, &case.input.shape(&case.fixtures)?),
             "baseline semantic input differs"
         );
         let prior_recipes: Vec<FixtureRecipe> = serde_json::from_value(
@@ -578,23 +674,36 @@ fn baseline(path: Option<&Path>, manifest: &Manifest) -> Result<Option<Vec<Recei
                 .clone(),
         )
         .context("baseline fixture recipes are invalid")?;
-        for (item_index, item) in case.input.items.iter().enumerate() {
-            for (part_index, part) in item.content.iter().enumerate() {
-                if let Some(id) = part.artifact_id() {
+        // Artifact IDs may differ across installations: compare fixtures by position.
+        for (item_index, (item, prior_item)) in case
+            .input
+            .items
+            .iter()
+            .zip(&receipt.input.items)
+            .enumerate()
+        {
+            for (part_index, (part, prior_part)) in
+                item.content.iter().zip(&prior_item.content).enumerate()
+            {
+                if let (Some((_, id)), Some((_, prior_id))) =
+                    (part.artifact(), prior_part.artifact())
+                {
                     let recipe = case
                         .fixtures
                         .iter()
                         .find(|fixture| fixture.artifact_id == id)
                         .context("baseline recipe missing")?;
-                    let source = &receipt.sources[item_index]
-                        .iter()
-                        .find(|row| row.part_index == part_index)
-                        .context("baseline source position missing")?
-                        .source;
                     let prior = prior_recipes
                         .iter()
-                        .find(|recipe| recipe.artifact_id == source.artifact_id)
+                        .find(|recipe| recipe.artifact_id == prior_id)
                         .context("baseline source recipe missing")?;
+                    let source = receipt
+                        .shape
+                        .items
+                        .get(item_index)
+                        .and_then(|item| item.content.get(part_index))
+                        .and_then(PartShape::source)
+                        .context("baseline source position missing")?;
                     ensure!(
                         source.media_type == recipe.media_type
                             && source.size == recipe.size
@@ -609,13 +718,13 @@ fn baseline(path: Option<&Path>, manifest: &Manifest) -> Result<Option<Vec<Recei
     }
     Ok(Some(receipts))
 }
-fn same_input(a: &EmbedRequest, b: &EmbedRequest) -> bool {
+fn same_shape(a: &RequestShape, b: &RequestShape) -> bool {
     a.processing_id().ok() == b.processing_id().ok()
         && a.items.len() == b.items.len()
         && a.items.iter().zip(&b.items).all(|(a, b)| {
             a.content.len() == b.content.len()
                 && a.content.iter().zip(&b.content).all(|(a, b)| match (a, b) {
-                    (ContentPart::Text { text: a }, ContentPart::Text { text: b }) => a == b,
+                    (PartShape::Text { text: a }, PartShape::Text { text: b }) => a == b,
                     _ => a.modality() == b.modality(),
                 })
         })
@@ -666,23 +775,48 @@ fn record(report: &mut Value, method: &str, started: Instant, detail: Value) {
     let steps = report["sequence"].as_array_mut().unwrap();
     steps.push(json!({"sequence":steps.len()+1,"method":method,"elapsedMs":elapsed(started),"detail":detail}));
 }
+/// The signed GET `artifact__create_download` answers, as the test caller reads it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Transfer {
+    method: String,
+    url: SignedUrl,
+    #[serde(default)]
+    headers: MediaHeaders,
+    expires_at: chrono::DateTime<chrono::Utc>,
+}
+/// What the test caller reads of the artifact `artifact__create_download` answers.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DownloadedArtifact {
+    artifact_id: uuid::Uuid,
+    state: String,
+    media_type: MediaType,
+    size: Option<MediaSize>,
+}
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Download {
+    artifact: DownloadedArtifact,
+    get: Transfer,
+}
 // Test-caller evidence only: production Embedding MCP never fetches source bytes.
 async fn verify_fixture_download(
     http: &reqwest::Client,
-    transfer: &SignedTransfer,
+    transfer: &Transfer,
     recipe: &FixtureRecipe,
 ) -> Result<()> {
     ensure!(
-        recipe.size.bytes() > 0 && recipe.size.bytes() <= MAX_ARTIFACT_BYTES,
+        recipe.size.bytes() <= MAX_SOURCE_BYTES,
         "fixture size exceeds byte bound"
     );
     ensure!(
-        transfer.method == TransferMethod::Get && transfer.expires_at > chrono::Utc::now(),
+        transfer.method == "GET" && transfer.expires_at > chrono::Utc::now(),
         "fixture transfer is not a live GET"
     );
-    let mut request = http.get(transfer.url.as_str());
-    for (name, value) in &transfer.headers {
-        request = request.header(name.as_str(), value.as_str());
+    let mut request = http.get(transfer.url.expose());
+    for (name, value) in transfer.headers.iter() {
+        request = request.header(name.as_str(), value.expose());
     }
     let mut response = request
         .send()
@@ -732,49 +866,64 @@ async fn verify_fixture_download(
     Ok(())
 }
 
-async fn authorized_sources(
+/// Signs each fixture of `case` as the test caller, checks its bytes against its recipe,
+/// and returns the embed request that carries the signed media.
+async fn signed_request(
     client: &HubClient,
     http: &reqwest::Client,
     case: &Case,
-) -> Result<Vec<Vec<SourceEvidence>>> {
-    let mut result = vec![];
-    for item in &case.input.items {
-        let mut rows = vec![];
-        for (part_index, part) in item.content.iter().enumerate() {
-            if let Some(id) = part.artifact_id() {
-                let download = client
-                    .call(CreateDownloadRequest { artifact_id: id })
-                    .timeout(DEADLINE)
-                    .await
-                    .map_err(|_| {
-                        anyhow!("typed Artifact download grant failed before embedding")
-                    })?;
-                let artifact = download.artifact;
-                ensure!(
-                    artifact.artifact_id == id && artifact.state == ArtifactState::Available,
-                    "Artifact identity/state differs"
-                );
-                let source = MediaSource {
-                    artifact_id: id,
-                    media_type: artifact.media_type,
-                    size: artifact.size.context("Artifact size unavailable")?,
-                };
-                let recipe = case
-                    .fixtures
-                    .iter()
-                    .find(|fixture| fixture.artifact_id == id)
-                    .context("fixture recipe missing")?;
-                ensure!(
-                    source.media_type == recipe.media_type && source.size == recipe.size,
-                    "Artifact type/size differs from fixture recipe"
-                );
-                verify_fixture_download(http, &download.get, recipe).await?;
-                rows.push(SourceEvidence { part_index, source });
-            }
+) -> Result<EmbedRequest> {
+    let tool = HubToolName::parse("artifact__create_download")
+        .map_err(|_| anyhow!("the Artifact download tool name"))?;
+    let mut signed = BTreeMap::new();
+    for id in case.input.artifacts() {
+        if signed.contains_key(&id) {
+            continue;
         }
-        result.push(rows);
+        let mut arguments = serde_json::Map::new();
+        arguments.insert("artifactId".into(), json!(id));
+        let answer = client
+            .call_tool(tool.clone(), arguments)
+            .timeout(DEADLINE)
+            .await
+            .map_err(|_| anyhow!("the Artifact download signing failed before embedding"))?;
+        ensure!(
+            answer.is_error != Some(true),
+            "Artifact refused the download before embedding"
+        );
+        let download: Download = serde_json::from_value(
+            answer
+                .structured_content
+                .context("the Artifact download has no structured content")?,
+        )
+        .map_err(|_| anyhow!("the Artifact download is not the expected shape"))?;
+        let artifact = download.artifact;
+        ensure!(
+            artifact.artifact_id == id && artifact.state == "available",
+            "Artifact identity/state differs"
+        );
+        let recipe = case
+            .fixtures
+            .iter()
+            .find(|fixture| fixture.artifact_id == id)
+            .context("fixture recipe missing")?;
+        let size = artifact.size.context("Artifact size unavailable")?;
+        ensure!(
+            artifact.media_type == recipe.media_type && size == recipe.size,
+            "Artifact type/size differs from fixture recipe"
+        );
+        verify_fixture_download(http, &download.get, recipe).await?;
+        signed.insert(
+            id,
+            SignedMedia {
+                url: download.get.url,
+                headers: download.get.headers,
+                media_type: artifact.media_type,
+                size,
+            },
+        );
     }
-    Ok(result)
+    case.input.request(&signed)
 }
 fn cosine(a: &[f32], b: &[f32]) -> f64 {
     let norm = |v: &[f32]| v.iter().map(|n| f64::from(*n).powi(2)).sum::<f64>().sqrt();
@@ -789,7 +938,7 @@ fn scores(result: &EmbeddingResult, rankings: &[Ranking]) -> Result<Vec<Value>> 
 }
 fn parity(previous: &Receipt, current: &Receipt) -> Result<Value> {
     ensure!(
-        same_input(&previous.input, &current.input)
+        same_shape(&previous.shape, &current.shape)
             && previous.output.processing_id == current.output.processing_id,
         "parity input/processing differs"
     );
@@ -883,31 +1032,30 @@ async fn run(
     );
     for (index, case) in manifest.cases.iter().enumerate() {
         let started = Instant::now();
-        let sources = authorized_sources(&client, &installation.http, case).await?;
+        let shape = case.input.shape(&case.fixtures)?;
+        let request = signed_request(&client, &installation.http, case).await?;
+        ensure!(
+            request.shape() == shape,
+            "the signed request differs from its case"
+        );
         record(
             report,
-            "tools/call Artifact download grants and independent fixture byte checks",
+            "tools/call artifact__create_download and independent fixture byte checks",
             started,
-            json!({"case":case.name,"mediaParts":sources.iter().map(Vec::len).sum::<usize>()}),
+            json!({"case":case.name,"mediaParts":case.input.artifacts().count()}),
         );
         let before = installation.usage().await?;
         let started = Instant::now();
-        let output = if composed { client.call(Forward{request:case.input.clone()}).timeout(DEADLINE).await }
-            else { client.call(case.input.clone()).timeout(DEADLINE).await }
+        let output = if composed { client.call(Forward{request}).timeout(DEADLINE).await }
+            else { client.call(request).timeout(DEADLINE).await }
             .map_err(|error|{record(report,"typed embed call",started,json!({"case":case.name,"status":"failed","nativeSdkError":discovery_error_detail(&error)}));anyhow!("embedding call failed; no automatic replay")})?;
         let measured = elapsed(started);
-        validate_public_result(
-            &output,
-            output.request_id,
-            &case.input,
-            &source_rows(&sources),
-            &installation.device,
-        )?;
+        validate_public_result(&output, output.request_id, &shape, &installation.device)?;
         let bytes = serde_json::to_vec(&output)?;
         let receipt = Receipt {
             name: case.name.clone(),
             input: case.input.clone(),
-            sources,
+            shape,
             output,
             output_bytes: bytes.len(),
             output_sha256: digest(&bytes),
@@ -969,10 +1117,11 @@ async fn run(
         let client = installation.client(restricted)?;
         let before = installation.usage().await?;
         let started = Instant::now();
-        let denied = client
-            .call(manifest.cases[0].input.clone())
-            .timeout(DEADLINE)
-            .await;
+        // Embedding permission refuses before any media matters: text alone suffices.
+        let probe: EmbedRequest = serde_json::from_value(
+            json!({"items":[{"content":[{"type":"text","text":"restricted identity probe"}]}]}),
+        )?;
+        let denied = client.call(probe).timeout(DEADLINE).await;
         ensure!(
             denied.is_err(),
             "restricted identity unexpectedly computed embeddings"
@@ -1073,27 +1222,15 @@ async fn native_hub_registered_composition_and_usage() -> Result<()> {
     qualify("corpus", true).await
 }
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct DenialPreparation {
-    artifact_id: ArtifactId,
-    owner: PrincipalId,
-    preparer: PrincipalId,
-    evidence_sha256: veoveo_types::Sha256Digest,
-    /// External owner/preparer confirms existence and no selected-caller read ACL: the
-    /// owner shares it with no grant the caller holds, directly or through a group.
-    caller_has_no_read_access: bool,
-}
-#[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum NegativeExpectation {
     RuntimeNotStarted { code: RejectionCode },
-    ArtifactDenied { prepared: Option<DenialPreparation> },
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct NegativeCase {
     name: String,
-    input: EmbedRequest,
+    input: CaseInput,
     #[serde(default)]
     fixtures: Vec<FixtureRecipe>,
     expect: NegativeExpectation,
@@ -1103,6 +1240,17 @@ struct NegativeCase {
 struct NegativeManifest {
     kind: String,
     cases: Vec<NegativeCase>,
+}
+impl NegativeCase {
+    fn case(&self) -> Case {
+        Case {
+            name: self.name.clone(),
+            input: self.input.clone(),
+            fixtures: self.fixtures.clone(),
+            expected_tokens: None,
+            rankings: vec![],
+        }
+    }
 }
 fn negative_preflight(manifest: &NegativeManifest) -> Result<()> {
     ensure!(
@@ -1121,40 +1269,10 @@ fn negative_preflight(manifest: &NegativeManifest) -> Result<()> {
                 && names.insert(&case.name),
             "invalid/repeated negative case name"
         );
-        case.input
-            .validate()
-            .map_err(|_| anyhow!("invalid public negative input"))?;
-        match &case.expect {
-            NegativeExpectation::RuntimeNotStarted { .. } => validate_manifest(&Manifest {
-                kind: "corpus".into(),
-                cases: vec![Case {
-                    name: case.name.clone(),
-                    input: case.input.clone(),
-                    fixtures: case.fixtures.clone(),
-                    expected_tokens: None,
-                    rankings: vec![],
-                }],
-            })?,
-            NegativeExpectation::ArtifactDenied { prepared } => {
-                let ids = case
-                    .input
-                    .items
-                    .iter()
-                    .flat_map(|item| &item.content)
-                    .filter_map(ContentPart::artifact_id)
-                    .collect::<Vec<_>>();
-                ensure!(
-                    ids.len() == 1 && case.fixtures.is_empty(),
-                    "ACL denial requires exactly one reference, no readable source recipe"
-                );
-                if let Some(proof) = prepared {
-                    ensure!(
-                        proof.artifact_id == ids[0] && proof.caller_has_no_read_access,
-                        "owner/preparer must confirm existing Artifact outside caller ACL"
-                    );
-                }
-            }
-        }
+        validate_manifest(&Manifest {
+            kind: "corpus".into(),
+            cases: vec![case.case()],
+        })?;
     }
     Ok(())
 }
@@ -1174,10 +1292,11 @@ fn negative_request_id(error: &CallError, expected: &NegativeExpectation) -> Res
     let id =
         uuid::Uuid::parse_str(id).map_err(|_| anyhow!("invalid rejection request identity"))?;
     ensure!(id.get_version_num() == 7, "rejection request is not UUIDv7");
-    let expected=match expected {
-        NegativeExpectation::RuntimeNotStarted{code} if code.is_input_error()=>format!("{code}; inference not started; zero actual usage recorded"),
-        NegativeExpectation::RuntimeNotStarted{code}=>format!("runtime rejected input before inference ({code}); zero actual usage recorded"),
-        NegativeExpectation::ArtifactDenied{..}=>"artifact authorization or metadata is unavailable; inference not started; no inference usage reserved".into(),
+    let NegativeExpectation::RuntimeNotStarted { code } = expected;
+    let expected = if code.is_input_error() {
+        format!("{code}; inference not started; zero actual usage recorded")
+    } else {
+        format!("runtime rejected input before inference ({code}); zero actual usage recorded")
     };
     ensure!(
         suffix == expected,
@@ -1192,53 +1311,13 @@ async fn run_negative(
 ) -> Result<()> {
     let client = installation.client(&installation.member)?;
     for case in &manifest.cases {
-        if matches!(
-            case.expect,
-            NegativeExpectation::ArtifactDenied { prepared: None }
-        ) {
-            report["cases"].as_array_mut().unwrap().push(json!({"name":case.name,"status":"not_exercised","reason":"no existing restricted Artifact with owner/preparer evidence; runner creates no identity or grants"}));
-            continue;
-        }
-        if let NegativeExpectation::RuntimeNotStarted { .. } = case.expect {
-            let sources = authorized_sources(
-                &client,
-                &installation.http,
-                &Case {
-                    name: case.name.clone(),
-                    input: case.input.clone(),
-                    fixtures: case.fixtures.clone(),
-                    expected_tokens: None,
-                    rankings: vec![],
-                },
-            )
-            .await?;
-            report["sourceEvidence"][&case.name] = serde_json::to_value(sources)?;
-        }
-        if let NegativeExpectation::ArtifactDenied {
-            prepared: Some(proof),
-        } = &case.expect
-        {
-            // A native read refusal is checked in addition to the external proof
-            // of existence/ACL. An unknown ID alone never proves ACL denial.
-            let denial = client
-                .read(ReadArtifact {
-                    artifact: proof.artifact_id,
-                })
-                .timeout(DEADLINE)
-                .await;
-            ensure!(
-                matches!(
-                    denial,
-                    Err(CallError::Rejected { .. } | CallError::Tool { .. })
-                ),
-                "prepared Artifact was readable or read did not produce a native refusal"
-            );
-            report["preparationEvidence"][&case.name] = serde_json::to_value(proof)?;
-        }
+        let request = signed_request(&client, &installation.http, &case.case()).await?;
+        report["sourceEvidence"][&case.name] =
+            serde_json::to_value(case.input.shape(&case.fixtures)?)?;
         let before = installation.usage().await?;
         let started = Instant::now();
         let error = client
-            .call(case.input.clone())
+            .call(request)
             .timeout(DEADLINE)
             .await
             .err()
@@ -1252,28 +1331,22 @@ async fn run_negative(
             started,
             json!({"case":case.name,"requestId":id,"before":before,"after":after}),
         );
-        match case.expect {
-            NegativeExpectation::RuntimeNotStarted { .. } => usage_delta(
-                &before,
-                &after,
-                0,
-                (case.input.items.len() as u64 * MAX_ITEM_TOKENS).min(MAX_BATCH_TOKENS),
-            )?,
-            NegativeExpectation::ArtifactDenied { .. } => ensure!(
-                before == after,
-                "Artifact denial reserved or recorded inference usage"
-            ),
-        }
+        usage_delta(
+            &before,
+            &after,
+            0,
+            (case.input.items.len() as u64 * MAX_ITEM_TOKENS).min(MAX_BATCH_TOKENS),
+        )?;
     }
     Ok(())
 }
 #[tokio::test]
-#[ignore = "requires real malformed media Artifact and externally confirmed existing denied Artifact (or explicit not-exercised case)"]
-async fn native_hub_real_embedding_rejections_and_artifact_denial() -> Result<()> {
+#[ignore = "requires real malformed media Artifact fixtures and a real GPU runtime"]
+async fn native_hub_real_embedding_rejections() -> Result<()> {
     let installation = Installation::load()?;
     let path = PathBuf::from(required("CASES_FILE")?);
     let inspection = &installation;
-    let report = json!({"scenario":"negative","sequence":[],"cases":[],"sourceEvidence":{},"preparationEvidence":{},"aclProofLimit":"existing object/ACL confirmed by external owner/preparer; native read and embedding resolution refusal observed separately"});
+    let report = json!({"scenario":"negative","sequence":[],"cases":[],"sourceEvidence":{}});
     run_with_evidence(
         &installation.report,
         || {
@@ -1315,29 +1388,31 @@ fn closed_negative_errors_do_not_accept_missing_ids_or_arbitrary_private_message
         message: "private arbitrary body with signed URL".into(),
     };
     assert!(negative_request_id(&error, &expected).is_err());
-    let mut input = support::input();
-    input.items[0].content = vec![ContentPart::Image {
-        artifact_id: ArtifactId::parse(uuid::Uuid::now_v7().to_string()).unwrap(),
-    }];
+    // A media part names its fixture; a case without the fixture's recipe is refused.
+    let image = uuid::Uuid::now_v7();
     let mut manifest = NegativeManifest {
         kind: "negative".into(),
         cases: vec![NegativeCase {
-            name: "denied".into(),
-            input,
+            name: "malformed-image".into(),
+            input: serde_json::from_value(
+                json!({"items":[{"content":[{"type":"image","artifactId":image}]}]}),
+            )
+            .unwrap(),
             fixtures: vec![],
-            expect: NegativeExpectation::ArtifactDenied { prepared: None },
+            expect: expected,
         }],
     };
+    assert!(negative_preflight(&manifest).is_err());
+    manifest.cases[0].fixtures.push(FixtureRecipe {
+        artifact_id: image,
+        media_type: MediaType::parse("image/png").unwrap(),
+        size: MediaSize::new(7).unwrap(),
+        sha256: veoveo_types::Sha256Digest::from_bytes([0; 32]),
+        recipe: "synthetic recipe of seven invalid image bytes".into(),
+    });
     negative_preflight(&manifest).unwrap();
-    manifest.cases[0].expect = NegativeExpectation::ArtifactDenied {
-        prepared: Some(DenialPreparation {
-            artifact_id: ArtifactId::parse(uuid::Uuid::now_v7().to_string()).unwrap(),
-            owner: PrincipalId::parse("00000000-0000-7000-8000-000000000001").unwrap(),
-            preparer: PrincipalId::parse("00000000-0000-7000-8000-000000000003").unwrap(),
-            evidence_sha256: veoveo_types::Sha256Digest::from_bytes([0; 32]),
-            caller_has_no_read_access: true,
-        }),
-    };
+    // A fixture whose media type is not of its part's kind is refused offline.
+    manifest.cases[0].fixtures[0].media_type = MediaType::parse("audio/wav").unwrap();
     assert!(negative_preflight(&manifest).is_err());
 }
 
@@ -1410,8 +1485,11 @@ fn parity_enforces_the_prescoring_component_threshold_even_when_cosine_passes() 
     let output = support::output(&support::text_request(&input));
     let previous = Receipt {
         name: "synthetic-threshold".into(),
-        input,
-        sources: vec![vec![]],
+        input: serde_json::from_value(
+            json!({"items":[{"content":[{"type":"text","text":"synthetic private text"}]}]}),
+        )
+        .unwrap(),
+        shape: input.shape(),
         output,
         output_bytes: 0,
         output_sha256: String::new(),
@@ -1465,19 +1543,23 @@ async fn fixture_fingerprints_are_checked_by_the_test_caller_with_bounded_signed
         let http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .build()?;
-        let mut transfer = SignedTransfer {
-            method: TransferMethod::Get,
-            url: veoveo_mcp_artifact::contract::SignedUrl::parse(format!(
+        let mut transfer = Transfer {
+            method: "GET".into(),
+            url: SignedUrl::parse(format!(
                 "http://{address}/fixture?synthetic-private-signature"
             ))
             .unwrap(),
-            headers: [("X-Fixture-Grant".into(), "synthetic-only".into())].into(),
+            headers: MediaHeaders::new([(
+                HeaderName::parse("X-Fixture-Grant").unwrap(),
+                HeaderValue::parse("synthetic-only").unwrap(),
+            )])
+            .unwrap(),
             expires_at: chrono::Utc::now() + chrono::TimeDelta::minutes(1),
         };
         let mut recipe = FixtureRecipe {
-            artifact_id: ArtifactId::parse(uuid::Uuid::now_v7().to_string())?,
-            media_type: veoveo_mcp_artifact::contract::MediaType::parse("image/synthetic")?,
-            size: veoveo_mcp_artifact::contract::ObjectSize::new(body.len() as u64)?,
+            artifact_id: uuid::Uuid::now_v7(),
+            media_type: MediaType::parse("image/synthetic")?,
+            size: MediaSize::new(body.len() as u64)?,
             sha256: veoveo_types::Sha256Digest::from_bytes(Sha256::digest(body).into()),
             recipe: "synthetic HTTP transfer fixture; no encoded media or inference".into(),
         };
@@ -1490,7 +1572,7 @@ async fn fixture_fingerprints_are_checked_by_the_test_caller_with_bounded_signed
             !error.to_string().contains("synthetic-private-signature"),
             "a fixture failure leaked its signed URL"
         );
-        recipe.size = veoveo_mcp_artifact::contract::ObjectSize::new(body.len() as u64 - 1)?;
+        recipe.size = MediaSize::new(body.len() as u64 - 1)?;
         ensure!(
             verify_fixture_download(&http, &transfer, &recipe)
                 .await

@@ -1,8 +1,7 @@
 //! Closed public results, provenance and defensive Veoveo service limits.
-use super::{ArtifactId, Dimensions, Modality, Preprocessing, PromptName};
+use super::{Dimensions, MediaSize, MediaType, Modality, Preprocessing, PromptName, SignedMedia};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use veoveo_mcp_artifact::contract::{MediaType, ObjectSize};
 use veoveo_types::Sha256Digest;
 
 pub const MODEL_ID: &str = "google/embeddinggemma-2";
@@ -14,7 +13,7 @@ pub const MAX_PARTS: usize = 32;
 pub const MAX_CONTENT_BYTES: usize = 65536;
 pub const MAX_ITEM_TOKENS: u64 = 8192;
 pub const MAX_BATCH_TOKENS: u64 = 16384;
-pub const MAX_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
+pub const MAX_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_TRANSFER_BYTES: u64 = 128 * 1024 * 1024;
 pub const MAX_PIXELS: u64 = 16_000_000;
 pub const MAX_TOTAL_PIXELS: u64 = 64_000_000;
@@ -85,7 +84,7 @@ pub struct Limits {
     pub max_content_bytes: usize,
     pub max_item_tokens: u64,
     pub max_batch_tokens: u64,
-    pub max_artifact_bytes: u64,
+    pub max_source_bytes: u64,
     pub max_transfer_bytes: u64,
     pub max_pixels: u64,
     pub max_total_pixels: u64,
@@ -103,7 +102,7 @@ impl Default for Limits {
             max_content_bytes: MAX_CONTENT_BYTES,
             max_item_tokens: MAX_ITEM_TOKENS,
             max_batch_tokens: MAX_BATCH_TOKENS,
-            max_artifact_bytes: MAX_ARTIFACT_BYTES,
+            max_source_bytes: MAX_SOURCE_BYTES,
             max_transfer_bytes: MAX_TRANSFER_BYTES,
             max_pixels: MAX_PIXELS,
             max_total_pixels: MAX_TOTAL_PIXELS,
@@ -161,12 +160,22 @@ pub struct EffectiveProcessing {
     pub prompt_sha256: Sha256Digest,
     pub preprocessing: Preprocessing,
 }
+/// The media a part states: its media type and size in bytes. A coverage row names it
+/// beside its position; it carries no URL and no identity of the media's holder.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MediaSource {
-    pub artifact_id: ArtifactId,
     pub media_type: MediaType,
-    pub size: ObjectSize,
+    pub size: MediaSize,
+}
+impl MediaSource {
+    /// What `media` states, without its signed URL and headers.
+    pub fn of(media: &SignedMedia) -> Self {
+        Self {
+            media_type: media.media_type.clone(),
+            size: media.size,
+        }
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -322,7 +331,7 @@ rejection_codes! {
     InvalidOption=>"invalid_option", InvalidMediaType=>"invalid_media_type", InvalidSource=>"invalid_source", ReservedPlaceholder=>"reserved_placeholder",
     IncompatibleAudioOptions=>"incompatible_audio_options", ContentLimit=>"content_limit", ItemTokenLimit=>"item_token_limit", BatchTokenLimit=>"batch_token_limit",
     RequestSize=>"request_size", InvalidJson=>"invalid_json", Busy=>"busy", Unauthorized=>"unauthorized", NotReady=>"not_ready",
-    SourceOrigin=>"source_origin", SourceExpired=>"source_expired", SourceTimeout=>"source_timeout", SourceRedirect=>"source_redirect", SourceRefused=>"source_refused",
+    SourceOrigin=>"source_origin", SourceTimeout=>"source_timeout", SourceRedirect=>"source_redirect", SourceRefused=>"source_refused",
     SourceEncoding=>"source_encoding", SourceSize=>"source_size", SourceUnavailable=>"source_unavailable",
     MediaDuration=>"media_duration", MediaPixels=>"media_pixels", MediaMetadata=>"media_metadata", MissingAudioStream=>"missing_audio_stream", InvalidMedia=>"invalid_media",
     PreprocessingCardinality=>"preprocessing_cardinality", PreprocessingCoverage=>"preprocessing_coverage", PreprocessingFailed=>"preprocessing_failed",

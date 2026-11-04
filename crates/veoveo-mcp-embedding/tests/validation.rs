@@ -2,26 +2,21 @@
 #![cfg(feature = "server")]
 mod support;
 use serde_json::{Value, json};
-use veoveo_mcp_artifact::contract::{
-    MediaType, ObjectSize, SignedTransfer, SignedUrl, TransferMethod,
-};
 use veoveo_mcp_embedding::{
     contract::*,
     protocol::*,
     provider::{validate_capabilities, validate_result},
 };
 use veoveo_types::Sha256Digest;
+/// A synthetic source: its signed GET names no object, and nothing may echo it.
 fn source(kind: &str) -> RuntimeSource {
     RuntimeSource {
-        artifact_id: ArtifactId::parse(uuid::Uuid::now_v7().to_string()).unwrap(),
         media_type: MediaType::parse(format!("{kind}/synthetic")).unwrap(),
-        size: ObjectSize::new(3).unwrap(),
-        get: SignedTransfer {
-            method: TransferMethod::Get,
+        size: MediaSize::new(3).unwrap(),
+        get: SignedGet {
             url: SignedUrl::parse("http://private.test:9000/object?synthetic-secret=do-not-log")
                 .unwrap(),
             headers: Default::default(),
-            expires_at: chrono::Utc::now() + chrono::TimeDelta::minutes(5),
         },
     }
 }
@@ -47,7 +42,7 @@ fn joint() -> (RuntimeRequest, EmbeddingResult) {
     parts.push(RuntimePart::Text {
         text: "after".into(),
     });
-    let request = RuntimeRequest::new(
+    let request = RuntimeRequest::from_items(
         uuid::Uuid::now_v7(),
         &input,
         vec![RuntimeItem { content: parts }],
@@ -138,19 +133,66 @@ fn frozen_python_jcs_bytes_match_rust_for_unicode_and_numeric_equivalence() {
     assert_ne!(hashes[0], hashes[2]);
 }
 #[test]
-fn media_source_contract_has_no_inherited_content_checksum() {
+fn the_runtime_source_carries_the_signed_get_type_and_size_and_no_artifact_identity() {
     let source = source("image");
     let mut private = serde_json::to_value(&source).unwrap();
+    assert_eq!(
+        private,
+        json!({"mediaType":"image/synthetic","size":3,
+            "get":{"url":"http://private.test:9000/object?synthetic-secret=do-not-log"}})
+    );
     let public = serde_json::to_value(source.identity()).unwrap();
-    assert!(private.get("sha256").is_none());
-    assert!(public.get("sha256").is_none());
-    private["sha256"] = json!(Sha256Digest::from_bytes([0; 32]));
-    assert!(serde_json::from_value::<RuntimeSource>(private).is_err());
-    let mut old_public = public;
-    old_public["sha256"] = json!(Sha256Digest::from_bytes([0; 32]));
-    assert!(serde_json::from_value::<MediaSource>(old_public).is_err());
+    assert_eq!(public, json!({"mediaType":"image/synthetic","size":3}));
+    for extra in ["artifactId", "sha256"] {
+        private[extra] = json!("synthetic");
+        assert!(serde_json::from_value::<RuntimeSource>(private.clone()).is_err());
+        private.as_object_mut().unwrap().remove(extra);
+        let mut old_public = public.clone();
+        old_public[extra] = json!("synthetic");
+        assert!(serde_json::from_value::<MediaSource>(old_public).is_err());
+    }
     let schema = serde_json::to_value(schemars::schema_for!(MediaSource)).unwrap();
     assert!(schema["properties"].get("sha256").is_none());
+    assert!(schema["properties"].get("artifactId").is_none());
+    assert!(!format!("{source:?}").contains("synthetic-secret"));
+    assert!(!format!("{:?}", source.get).contains("synthetic-secret"));
+}
+
+#[test]
+fn the_runtime_request_carries_each_signed_get_and_a_public_request_maps_to_it() {
+    let image = support::media(Modality::Image, 3);
+    let mut input = support::input();
+    input.items = vec![
+        support::item(vec![ContentPart::text("before"), image.clone()]),
+        support::item(vec![support::media(Modality::Video, 5)]),
+    ];
+    let request = RuntimeRequest::new(uuid::Uuid::now_v7(), &input);
+    request.validate().unwrap();
+    let wire = serde_json::to_value(&request).unwrap();
+    assert_eq!(
+        wire["items"][0]["content"][0],
+        json!({"type":"text","text":"before"})
+    );
+    assert_eq!(
+        wire["items"][0]["content"][1],
+        json!({"type":"image","source":{"mediaType":"image/png","size":3,"get":{
+            "url":support::SIGNED_URL,"headers":{"x-amz-security-token":support::SIGNED_HEADER}}}})
+    );
+    assert_eq!(
+        wire["items"][1]["content"][0]["source"]["mediaType"],
+        "video/mp4"
+    );
+    assert!(!wire.to_string().contains("artifactId"));
+    let debug = format!("{request:?} {:?}", request.items[0].content[1].source());
+    assert!(!debug.contains("synthetic-secret") && !debug.contains(support::SIGNED_HEADER));
+    // The shape the result is validated against keeps positions, types and sizes only.
+    let shape = request.shape();
+    assert_eq!(shape, input.shape());
+    assert!(
+        !serde_json::to_string(&shape)
+            .unwrap()
+            .contains("synthetic-secret")
+    );
 }
 
 #[test]
@@ -171,8 +213,8 @@ fn repeated_modalities_and_repeated_native_indices_keep_joint_order_and_private_
     let public = serde_json::to_string(&result).unwrap();
     for forbidden in [
         "synthetic-secret",
-        "SignedTransfer",
-        "expiresAt",
+        "SignedGet",
+        "artifactId",
         "\"get\"",
         "\"url\"",
     ] {
@@ -221,7 +263,7 @@ fn tampered_media_processing_identity_coverage_cardinality_and_order_are_refused
             }
             10 => {
                 if let MediaCoverage::Audio { source, .. } = &mut result.items[0].media[1] {
-                    source.size = ObjectSize::new(4).unwrap();
+                    source.size = MediaSize::new(4).unwrap();
                 }
             }
             11 => {
@@ -273,17 +315,10 @@ fn exact_capabilities_defaults_packages_and_service_limits_are_required() {
 #[ignore = "requires coordinator-supplied safe real Python capability/response fixture"]
 fn actual_python_wire_is_accepted_by_rust_without_another_model_call() {
     #[derive(serde::Deserialize)]
-    #[serde(rename_all = "camelCase", deny_unknown_fields)]
-    struct ExpectedSource {
-        part_index: usize,
-        source: MediaSource,
-    }
-    #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Wire {
         capabilities: Capabilities,
-        input: EmbedRequest,
-        sources: Vec<Vec<ExpectedSource>>,
+        input: RequestShape,
         output: EmbeddingResult,
     }
     let path =
@@ -297,21 +332,11 @@ fn actual_python_wire_is_accepted_by_rust_without_another_model_call() {
         serde_json::to_value(&fixture.output).unwrap(),
         serde_json::to_value(&structured.output).unwrap()
     );
-    let sources: Vec<Vec<_>> = fixture
-        .sources
-        .into_iter()
-        .map(|rows| {
-            rows.into_iter()
-                .map(|row| (row.part_index, row.source))
-                .collect()
-        })
-        .collect();
     validate_capabilities(&fixture.capabilities, &fixture.output.execution.device).unwrap();
     veoveo_mcp_embedding::provider::validate_public_result(
         &fixture.output,
         fixture.output.request_id,
         &fixture.input,
-        &sources,
         &fixture.output.execution.device,
     )
     .unwrap();
@@ -335,7 +360,7 @@ fn actual_decoded_audio_aggregate_is_bounded_despite_underreported_source_metada
                 }
             })
             .collect();
-        let request = RuntimeRequest::new(
+        let request = RuntimeRequest::from_items(
             uuid::Uuid::now_v7(),
             &input,
             vec![RuntimeItem { content: parts }],

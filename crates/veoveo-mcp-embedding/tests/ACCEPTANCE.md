@@ -11,20 +11,22 @@ Set `VEOVEO_EMBEDDING_ACCEPTANCE=1` and these `VEOVEO_ACCEPTANCE_` variables:
 `PRINCIPAL`, `TENANT`, `CASES_FILE`, and `REPORT` (new path in an existing
 directory). Optional `CA_FILE` supplies the admitted CA bundle; `BASELINE_REPORT` selects
 a previously passed corpus/capacity report; `READ_ONLY_BEARER_ENV` selects a pre-existing
-identity denied embedding permission. Bearers and signed transfers never enter reports.
+identity denied embedding permission. Bearers and signed URLs never enter reports.
 
 Use the exact reviewed Git lock before deployment. Select one ignored test at a time:
 
 ```sh
 cargo test --locked -p veoveo-mcp-embedding --test acceptance native_hub_real_embedding_corpus_and_usage -- --ignored --exact
 cargo test --locked -p veoveo-mcp-embedding --test acceptance native_hub_real_embedding_capacity_and_usage -- --ignored --exact
-cargo test --locked -p veoveo-mcp-embedding --test acceptance native_hub_real_embedding_rejections_and_artifact_denial -- --ignored --exact
+cargo test --locked -p veoveo-mcp-embedding --test acceptance native_hub_real_embedding_rejections -- --ignored --exact
 ```
 
 ## Success manifest
 
-All fields are closed. `kind` is corpus or capacity; at most 16 serial cases run.
-This illustrative manifest requires real UUIDs and measured fixture values:
+All fields are closed. `kind` is corpus or capacity; at most 16 serial cases run. A
+media part of a manifest's input names its fixture Artifact; the runner signs it right
+before the case's call, so a manifest holds no signed URL. This illustrative manifest
+requires real UUIDs and measured fixture values:
 
 ```json
 {
@@ -62,14 +64,17 @@ not a model guarantee. Exercise independent text/media items, joint ordered moda
 repeated images/audio/video parts, dimensions and optional native soundtrack separately.
 Soundtrack inclusion cannot coexist with separate audio parts in the batch.
 
-Before any live call, the runner validates public inputs and any baseline, including
-per-part MIME/size and the baseline's independent fixture-recipe fingerprints.
-Artifact IDs may differ across installations. Before inference, the test caller obtains
-typed signed downloads and streams each fixture within its exact-size bound, computing
-its own SHA-256 against the supplied recipe. This test-only evidence is not an Artifact
-metadata field or a production MCP byte-fetch path. Signed URLs/headers stay private.
-It then calls typed `embed` without retry. Each validated output, measured embed time and compact JSON byte/hash
-receipt is stored before ranking, accounting or parity assertions. Failed later checks
+Before any live call, the runner validates public inputs, each with its fixtures' stated
+MIME/size in its parts' places, and any baseline, including the baseline's independent
+fixture-recipe fingerprints. Artifact IDs may differ across installations; fixtures are
+compared by position. Before inference, the test caller signs each fixture's download
+through `artifact__create_download` and streams it within its exact-size bound,
+computing its own SHA-256 against the supplied recipe. This test-only evidence is not an
+Artifact metadata field or a production MCP byte-fetch path. It then calls typed `embed`
+with the signed media, without retry. Signed URLs/headers stay private: a receipt keeps
+the case input with its Artifact IDs and the request shape, never a signed URL. Each
+validated output, measured embed time and compact JSON byte/hash receipt is stored
+before ranking, accounting or parity assertions. Failed later checks
 retain that output. Byte evidence describes structured-result reserialization, not raw
 HTTP bytes. Daily own usage confirms selected-principal totals, not full delegation
 attribution. Cross-device parity requires equal processing/source bytes and checks
@@ -90,10 +95,6 @@ include its exact safe fixture recipe. The public input is otherwise valid:
     "fixtures": [{"artifactId": "<invalid-image-id>", "mediaType": "image/png", "size": 7,
       "sha256": "sha256:<64-lowercase-hex>", "recipe": "exact seven invalid image bytes"}],
     "expect": {"type": "runtime_not_started", "code": "preprocessing_failed"}
-  }, {
-    "name": "actual-artifact-acl-denial",
-    "input": {"items": [{"content": [{"type": "image", "artifactId": "<existing-restricted-id>"}]}]},
-    "expect": {"type": "artifact_denied", "prepared": null}
   }]
 }
 ```
@@ -103,30 +104,17 @@ the native backend; this example uses that code. Other malformed codecs/recipes 
 produce different closed codes and require their own measured expectations.
 A runtime rejection must match the service's closed request-bound not-started response;
 one estimate and one zero-actual usage record must appear. Unknown SDK/private messages
-are never copied into reports. For ACL denial, `prepared: null` explicitly records
-`not_exercised` and makes no call for that case. To exercise it, an owner/preparer must
-provide a known existing Artifact outside the selected caller's actual read ACL:
-
-```json
-{"artifactId": "<existing-restricted-id>", "owner": "<owner-principal-id>",
- "preparer": "<preparer-principal-id>",
- "evidenceSha256": "sha256:<owner-preparation-receipt-hash>",
- "callerHasNoReadAccess": true}
-```
-
-The owner must share it with no grant the caller holds, directly or through one of the
-caller's groups, since a group grant gives access. A random missing ID or unavailable
-metadata does not prove ACL denial. The runner checks native Artifact read refusal and
-closed embedding resolution refusal, then requires unchanged own usage (no reservation).
-External preparation evidence proves existence/ACL setup; these observed refusals alone
-do not reveal Artifact's internal SQL decision.
+are never copied into reports. Embedding authorizes no media: Artifact decides access
+when the caller signs a download, so ACL denial is Artifact's to qualify, not this
+runner's.
 
 ## Temporary native composed caller
 
 `native_hub_registered_composition_and_usage` registers the test-only `embeddingprobe`
 server with one typed `forward_embed` tool and declared embedding-create use. It creates
 no Tasks and adds no production route. The single corpus case calls caller → Embedding
-→ Artifact through native SDK ServerCalls; use a joint media case to exercise both hops.
+through native SDK ServerCalls, with media the test caller signed; use a joint media case
+to carry signed media through the composed hop.
 
 Root/builder must first admit the exact logical HTTP endpoint, fixed bind address, startup
 native Hub binding and existing registration credential custody. A ServiceExposure alone
@@ -154,8 +142,9 @@ Do not replay an ambiguous inference to repair a fixture lifecycle failure.
 ## Python producer/Rust consumer smoke
 
 No model call or network is needed to validate a retained safe Python fixture with exact
-keys `capabilities`, `input`, `sources`, `output`. `sources` is one array per item of
-`{partIndex,source:{artifactId,mediaType,size}}`, with no transfer grants:
+keys `capabilities`, `input`, `output`. `input` is the request shape: the request with
+each media part's `url` and `headers` left out, `{"type":"image","mediaType":...,"size":...}`,
+so the fixture holds no signed URL:
 
 ```sh
 VEOVEO_EMBEDDING_WIRE_FIXTURE=/absolute/retained-wire.json cargo test --locked -p veoveo-mcp-embedding --test validation actual_python_wire_is_accepted_by_rust_without_another_model_call -- --ignored --exact
