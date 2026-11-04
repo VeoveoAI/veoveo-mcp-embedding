@@ -12,17 +12,17 @@ publish = false
 
 [workspace.dependencies]
 # veoveo-core, pinned to one revision for every core crate.
-veoveo-fixtures = { git = "https://github.com/VeoveoAI/veoveo-core", rev = "05b6c47540680e085cc5356ed4ba8742ecc78bff" }
-veoveo-skills = { git = "https://github.com/VeoveoAI/veoveo-core", rev = "05b6c47540680e085cc5356ed4ba8742ecc78bff" }
-veoveo-store = { git = "https://github.com/VeoveoAI/veoveo-core", rev = "05b6c47540680e085cc5356ed4ba8742ecc78bff" }
-veoveo-types = { git = "https://github.com/VeoveoAI/veoveo-core", rev = "05b6c47540680e085cc5356ed4ba8742ecc78bff" }
-veoveo-usage = { git = "https://github.com/VeoveoAI/veoveo-core", rev = "05b6c47540680e085cc5356ed4ba8742ecc78bff" }
+veoveo-fixtures = { git = "https://github.com/VeoveoAI/veoveo-core", rev = "97e85e054924d6db999da2d3d93ba3e383910e2d" }
+veoveo-skills = { git = "https://github.com/VeoveoAI/veoveo-core", rev = "97e85e054924d6db999da2d3d93ba3e383910e2d" }
+veoveo-store = { git = "https://github.com/VeoveoAI/veoveo-core", rev = "97e85e054924d6db999da2d3d93ba3e383910e2d" }
+veoveo-types = { git = "https://github.com/VeoveoAI/veoveo-core", rev = "97e85e054924d6db999da2d3d93ba3e383910e2d" }
+veoveo-usage = { git = "https://github.com/VeoveoAI/veoveo-core", rev = "97e85e054924d6db999da2d3d93ba3e383910e2d" }
 chrono = { version = "=0.4.45", default-features = false, features = ["serde", "clock"] }
 
 # The Rust SDK for Veoveo MCP servers: the contract feature for declarations, the server
 # feature for hosting, registration and the forwarded identity.
-veoveo-hub-sdk = { git = "https://github.com/VeoveoAI/veoveo-hub-sdk", rev = "cc16cfeb0309628ab3445861e90c457deb31901c", default-features = false }
-veoveo-hub-sdk-fixture = { git = "https://github.com/VeoveoAI/veoveo-hub-sdk", rev = "cc16cfeb0309628ab3445861e90c457deb31901c" }
+veoveo-hub-sdk = { git = "https://github.com/VeoveoAI/veoveo-hub-sdk", rev = "22ff657df5368eb15dd1a8e39c02ce57e19e3887", default-features = false }
+veoveo-hub-sdk-fixture = { git = "https://github.com/VeoveoAI/veoveo-hub-sdk", rev = "22ff657df5368eb15dd1a8e39c02ce57e19e3887" }
 serde_json_canonicalizer = "=0.3.2"
 sha2 = "=0.11.0"
 
