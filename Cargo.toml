@@ -21,8 +21,8 @@ chrono = { version = "=0.4.45", default-features = false, features = ["serde", "
 
 # The Rust SDK for Veoveo MCP servers: the contract feature for declarations, the server
 # feature for hosting, registration and the forwarded identity.
-veoveo-hub-sdk = { git = "https://github.com/VeoveoAI/veoveo-hub-sdk", rev = "14a649f3e37dca39a4bb29fc39dd03c6565b0490", default-features = false }
-veoveo-hub-sdk-fixture = { git = "https://github.com/VeoveoAI/veoveo-hub-sdk", rev = "14a649f3e37dca39a4bb29fc39dd03c6565b0490" }
+veoveo-hub-sdk = { git = "https://github.com/VeoveoAI/veoveo-hub-sdk", rev = "5ff33f1f669385099fdd405f6e6bbd6ee190a45c", default-features = false }
+veoveo-hub-sdk-fixture = { git = "https://github.com/VeoveoAI/veoveo-hub-sdk", rev = "5ff33f1f669385099fdd405f6e6bbd6ee190a45c" }
 serde_json_canonicalizer = "=0.3.2"
 sha2 = "=0.11.0"
 
@@ -34,7 +34,7 @@ dotenvy = "0.15.7"
 # The SDK's HTTP client release; registration and the tests share it.
 reqwest = { version = "=0.13.5", default-features = false }
 # The rmcp fork the SDK pins; the tool router uses its macros.
-rmcp = { version = "=3.8.0", git = "https://github.com/VeoveoAI/rust-sdk", rev = "d45f7f5e43e910f818400ca702cc904c5682c213" }
+rmcp = { version = "=3.9.0", git = "https://github.com/VeoveoAI/rust-sdk", rev = "e8c8868f252b22835b960942d38a4b51182e0270" }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 secrecy = "0.10.3"
 tempfile = "=3.27.0"

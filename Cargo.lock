@@ -2260,8 +2260,8 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "3.8.0"
-source = "git+https://github.com/VeoveoAI/rust-sdk?rev=d45f7f5e43e910f818400ca702cc904c5682c213#d45f7f5e43e910f818400ca702cc904c5682c213"
+version = "3.9.0"
+source = "git+https://github.com/VeoveoAI/rust-sdk?rev=e8c8868f252b22835b960942d38a4b51182e0270#e8c8868f252b22835b960942d38a4b51182e0270"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -2294,8 +2294,8 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "3.8.0"
-source = "git+https://github.com/VeoveoAI/rust-sdk?rev=d45f7f5e43e910f818400ca702cc904c5682c213#d45f7f5e43e910f818400ca702cc904c5682c213"
+version = "3.9.0"
+source = "git+https://github.com/VeoveoAI/rust-sdk?rev=e8c8868f252b22835b960942d38a4b51182e0270#e8c8868f252b22835b960942d38a4b51182e0270"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -3587,7 +3587,7 @@ dependencies = [
 [[package]]
 name = "veoveo-hub-sdk"
 version = "0.1.0"
-source = "git+https://github.com/VeoveoAI/veoveo-hub-sdk?rev=14a649f3e37dca39a4bb29fc39dd03c6565b0490#14a649f3e37dca39a4bb29fc39dd03c6565b0490"
+source = "git+https://github.com/VeoveoAI/veoveo-hub-sdk?rev=5ff33f1f669385099fdd405f6e6bbd6ee190a45c#5ff33f1f669385099fdd405f6e6bbd6ee190a45c"
 dependencies = [
  "anyhow",
  "aws-lc-rs",
@@ -3638,7 +3638,7 @@ dependencies = [
 [[package]]
 name = "veoveo-hub-sdk-fixture"
 version = "0.1.0"
-source = "git+https://github.com/VeoveoAI/veoveo-hub-sdk?rev=14a649f3e37dca39a4bb29fc39dd03c6565b0490#14a649f3e37dca39a4bb29fc39dd03c6565b0490"
+source = "git+https://github.com/VeoveoAI/veoveo-hub-sdk?rev=5ff33f1f669385099fdd405f6e6bbd6ee190a45c#5ff33f1f669385099fdd405f6e6bbd6ee190a45c"
 dependencies = [
  "anyhow",
  "aws-lc-rs",
@@ -3667,7 +3667,7 @@ dependencies = [
 [[package]]
 name = "veoveo-hub-sdk-macros"
 version = "0.1.0"
-source = "git+https://github.com/VeoveoAI/veoveo-hub-sdk?rev=14a649f3e37dca39a4bb29fc39dd03c6565b0490#14a649f3e37dca39a4bb29fc39dd03c6565b0490"
+source = "git+https://github.com/VeoveoAI/veoveo-hub-sdk?rev=5ff33f1f669385099fdd405f6e6bbd6ee190a45c#5ff33f1f669385099fdd405f6e6bbd6ee190a45c"
 dependencies = [
  "proc-macro2",
  "quote",
