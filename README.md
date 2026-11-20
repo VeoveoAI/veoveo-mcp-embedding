@@ -17,7 +17,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 docker build --target check .
 ```
 
-Tests using the native Core fixture require PostgreSQL 18.7 programs on PATH, as the pinned dev image provides. Contract dependencies exclude tokio, reqwest, rmcp and sqlx; the client adds only the SDK's client. Full checks/builds belong to the builder during coordinated work.
+Tests using the native Core fixture require PostgreSQL 19.0 programs on PATH, as the pinned dev image provides. Contract dependencies exclude tokio, reqwest, rmcp and sqlx; the client adds only the SDK's client. Full checks/builds belong to the builder during coordinated work.
 
 ## Configure and run
 
