@@ -211,3 +211,12 @@ alternate wire forms nor handwritten number conversion are accepted. Tests cover
 JSON and the SDK's structuredContent Value path, including actual retained Python output.
 See [acceptance inputs](tests/ACCEPTANCE.md) for the opt-in manifest and temporary native
 caller lifecycle. Artifact ACL denial is Artifact's, at signing, and is qualified there.
+
+## Patched URL dependency boundary
+
+The native contract, client and server share the qualified Core and SDK revisions
+using upstream url 2.5.9, including the RUSTSEC-2026-0592 origin recursion fix.
+This dependency-only transition changes no embedding model, protocol, inference
+behavior, media authority or caller grants. Both ordinary Mac and Linux Docker
+check stages remain release gates, including contract/client feature isolation
+and dependency audit.
