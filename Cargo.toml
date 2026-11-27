@@ -12,17 +12,17 @@ publish = false
 
 [workspace.dependencies]
 # veoveo-core, pinned to one revision for every core crate.
-veoveo-fixtures = { git = "https://github.com/VeoveoAI/veoveo-core", rev = "9be8fac678163aae5cc76b87987282f739d5c2bc" }
-veoveo-skills = { git = "https://github.com/VeoveoAI/veoveo-core", rev = "9be8fac678163aae5cc76b87987282f739d5c2bc" }
-veoveo-store = { git = "https://github.com/VeoveoAI/veoveo-core", rev = "9be8fac678163aae5cc76b87987282f739d5c2bc" }
-veoveo-types = { git = "https://github.com/VeoveoAI/veoveo-core", rev = "9be8fac678163aae5cc76b87987282f739d5c2bc" }
-veoveo-usage = { git = "https://github.com/VeoveoAI/veoveo-core", rev = "9be8fac678163aae5cc76b87987282f739d5c2bc" }
+veoveo-fixtures = { git = "https://github.com/VeoveoAI/veoveo-core", rev = "d8b0e6fc857649b2c2dba081fce08946a33b6d97" }
+veoveo-skills = { git = "https://github.com/VeoveoAI/veoveo-core", rev = "d8b0e6fc857649b2c2dba081fce08946a33b6d97" }
+veoveo-store = { git = "https://github.com/VeoveoAI/veoveo-core", rev = "d8b0e6fc857649b2c2dba081fce08946a33b6d97" }
+veoveo-types = { git = "https://github.com/VeoveoAI/veoveo-core", rev = "d8b0e6fc857649b2c2dba081fce08946a33b6d97" }
+veoveo-usage = { git = "https://github.com/VeoveoAI/veoveo-core", rev = "d8b0e6fc857649b2c2dba081fce08946a33b6d97" }
 chrono = { version = "=0.4.45", default-features = false, features = ["serde", "clock"] }
 
 # The Rust SDK for Veoveo MCP servers: the contract feature for declarations, the server
 # feature for hosting, registration and the forwarded identity.
-veoveo-hub-sdk = { git = "https://github.com/VeoveoAI/veoveo-hub-sdk", rev = "18a6e8c5f8a69ca57a6e12f8b752203574efa231", default-features = false }
-veoveo-hub-sdk-fixture = { git = "https://github.com/VeoveoAI/veoveo-hub-sdk", rev = "18a6e8c5f8a69ca57a6e12f8b752203574efa231" }
+veoveo-hub-sdk = { git = "https://github.com/VeoveoAI/veoveo-hub-sdk", rev = "109da8467bfaf79fea9094bbb57e191fe43e9737", default-features = false }
+veoveo-hub-sdk-fixture = { git = "https://github.com/VeoveoAI/veoveo-hub-sdk", rev = "109da8467bfaf79fea9094bbb57e191fe43e9737" }
 serde_json_canonicalizer = "=0.3.2"
 sha2 = "=0.11.0"
 
@@ -39,7 +39,7 @@ rustls = { version = "0.23.46", default-features = false, features = ["ring", "s
 secrecy = "0.10.3"
 tempfile = "=3.27.0"
 tracing = "0.1.44"
-url = "=2.5.8"
+url = "=2.5.9"
 
 schemars = { version = "1.2.2", features = ["uuid1"] }
 serde = { version = "=1.0.229", features = ["derive"] }
