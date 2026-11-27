@@ -347,10 +347,18 @@ impl RejectionCode {
             _ => 422,
         }
     }
+    /// Whether the caller's own request caused the rejection, so it answers as invalid
+    /// params. Of the source rejections, only those the runtime raises from the request
+    /// alone are the caller's: `source_refused` covers every refusing status, an expired
+    /// signature and a storage outage alike, and the rest are the storage's.
     pub fn is_input_error(self) -> bool {
         matches!(
             self,
-            Self::InvalidRequest
+            Self::InvalidSource
+                | Self::SourceOrigin
+                | Self::SourceRedirect
+                | Self::SourceSize
+                | Self::InvalidRequest
                 | Self::InvalidBatch
                 | Self::InvalidItem
                 | Self::InvalidPart

@@ -101,6 +101,15 @@ type family and the stated size bounds, then hands the signed GET to its runtime
 bulk bytes pass through MCP, and a request that names media Embedding cannot fetch
 fails at the runtime as a closed `source_*` rejection with zero actual usage.
 
+A rejection the caller's own request causes is invalid params, `-32602`, with its code;
+any other is an internal error, `-32603`. Of the source rejections, `invalid_source`
+(a malformed URL or headers), `source_origin` (a URL off the storage origin, such as one
+no Artifact signed), `source_redirect` and `source_size` (bytes other than the stated
+size) are the caller's: the runtime raises them only from the request it was given.
+`source_refused` stays internal, because the runtime gives it to every status other
+than 200 and a redirect, so an expired signature and a storage outage read alike; so do
+`source_encoding`, `source_timeout` and `source_unavailable`, which the storage causes.
+
 The private server-only DTO carries each media part's `mediaType`, `size` and the
 caller's signed GET, `{url, headers}`; empty headers are omitted. There is no
 Artifact identity. URLs/headers appear in the public input schema, which must carry

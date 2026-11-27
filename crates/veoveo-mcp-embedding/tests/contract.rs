@@ -236,3 +236,30 @@ fn addresses_use_native_resource_profiles() {
     assert!(EmbeddingResource::parse("embedding://capabilities?model=other").is_err());
     let _reader = ReadCapabilities;
 }
+#[test]
+fn source_rejections_the_request_causes_are_the_callers_and_the_storages_are_not() {
+    // The caller's own request: a malformed source, a URL off the storage origin (such as
+    // one no Artifact signed), a redirecting URL, bytes other than the stated size.
+    for code in [
+        RejectionCode::InvalidSource,
+        RejectionCode::SourceOrigin,
+        RejectionCode::SourceRedirect,
+        RejectionCode::SourceSize,
+    ] {
+        assert!(code.is_input_error(), "{code} is the caller's");
+    }
+    // The storage's or the service's: a refusing status reads the same for an expired
+    // signature and an outage, and the rest are transfer or service conditions.
+    for code in [
+        RejectionCode::SourceRefused,
+        RejectionCode::SourceEncoding,
+        RejectionCode::SourceTimeout,
+        RejectionCode::SourceUnavailable,
+        RejectionCode::Busy,
+        RejectionCode::NotReady,
+        RejectionCode::Unauthorized,
+        RejectionCode::PreprocessingFailed,
+    ] {
+        assert!(!code.is_input_error(), "{code} is not the caller's");
+    }
+}
